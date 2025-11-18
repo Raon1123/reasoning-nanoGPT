@@ -1,3 +1,7 @@
+# ignore uv related files
+uv.lock
+
+
 .DS_Store
 .idea
 .ipynb_checkpoints/
