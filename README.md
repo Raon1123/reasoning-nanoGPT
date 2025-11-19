@@ -35,7 +35,7 @@ At `data/arc_agi`, we expect following structure:
 - [ ] add training and evaluation scripts for reasoning tasks
 - [ ] upgrade nanochat model to support distributed training
 - [ ] add code tests... (not prioritized)
-- [ ]
+- [ ] We can find our dataset class at `data/dataset.py`. It suppose that our memory budget is low... How to improve it e.g. memmap? 
 
 
 ## acknowledgements

@@ -9,19 +9,7 @@ import numpy as np
 DIHEDRAL_INVERSE = [0, 3, 2, 1, 4, 5, 6, 7]
 
 
-class PuzzleDatasetMetadata(pydantic.BaseModel):
-    pad_id: int
-    ignore_label_id: Optional[int]
-    blank_identifier_id: int
-    
-    vocab_size: int
-    seq_len: int
-    num_puzzle_identifiers: int
-    
-    total_groups: int
-    mean_puzzle_examples: float
 
-    sets: List[str]
 
 
 def dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:

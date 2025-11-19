@@ -12,7 +12,9 @@ dependencies = [
   "tiktoken>=0.12.0",
   "tqdm>=4.67.1",
   "wandb>=0.23.0",
-  "argdantic>=1.3.3",
+  "argdantic",
+  "pydantic",
+  "flake8>=7.3.0",
 ]
 
 [[tool.uv.index]]
