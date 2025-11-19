@@ -28,6 +28,7 @@ class PuzzleDatasetMetadata(pydantic.BaseModel):
     mean_puzzle_examples: float
 
     sets: List[str]
+    dataset_paths: List[str] = ["data/arc_agi"]
 
 
 def _sample_batch(rng: np.random.Generator, 
