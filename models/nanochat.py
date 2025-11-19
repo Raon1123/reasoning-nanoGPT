@@ -126,7 +126,10 @@ class MLP(nn.Module):
 class Block(nn.Module):
     def __init__(self, config, layer_idx):
         super().__init__()
-        self.attn = CausalSelfAttention(config, layer_idx)
+        #self.attn = CausalSelfAttention(config, layer_idx) # we don't need causal attention for our use case
+        
+        # replace with regular self-attention
+        self.attn = nn.MultiheadAttention(embed_dim=config.n_embd, num_heads=config.n_head, bias=False, batch_first=True)
         self.mlp = MLP(config)
 
     def forward(self, x, cos_sin, kv_cache):
