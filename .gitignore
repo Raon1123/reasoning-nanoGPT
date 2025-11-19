@@ -1,6 +1,8 @@
 # ignore uv related files
 uv.lock
 
+# ignore datasets
+data/arc-aug-*
 
 .DS_Store
 .idea
