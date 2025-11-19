@@ -15,6 +15,7 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from src.consts import IGNORE_LABEL_ID
 
+
 class PuzzleDatasetMetadata(pydantic.BaseModel):
     pad_id: int
     ignore_label_id: Optional[int]
@@ -28,7 +29,18 @@ class PuzzleDatasetMetadata(pydantic.BaseModel):
     mean_puzzle_examples: float
 
     sets: List[str]
-    dataset_paths: List[str] = ["data/arc_agi"]
+    
+
+class PuzzleDatasetConfig(pydantic.BaseModel):
+    seed: int
+    dataset_path: str
+    global_batch_size: int
+    test_set_mode: bool
+
+    epochs_per_iter: int  # Batch X epochs in an iteration to reduce overhead.
+
+    rank: int
+    num_replicas: int
 
 
 def _sample_batch(rng: np.random.Generator, 
@@ -65,11 +77,11 @@ def _sample_batch(rng: np.random.Generator,
 
 class PuzzleDataset(IterableDataset):
     def __init__(self,
-                 config: PuzzleDatasetMetadata,
+                 config: PuzzleDatasetConfig,
                  split: str,) -> None:
         """
         Dataset for reasoning tasks.
-        config: PuzzleDatasetMetadata object with dataset metadata.
+        config: PuzzleDatasetConfig object with dataset configuration.
         split: dataset split to use (e.g. 'train', 'eval').
         """
         super().__init__()
