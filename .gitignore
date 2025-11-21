@@ -3,6 +3,10 @@ uv.lock
 
 # logging related files
 runs/
+out/
+
+# about testing
+.pytest_cache/
 
 data/arc-aug-1000
 
