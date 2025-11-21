@@ -2,7 +2,7 @@
 uv.lock
 
 # logging related files
-run/
+runs/
 
 data/arc-aug-1000
 
