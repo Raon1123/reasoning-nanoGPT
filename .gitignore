@@ -1,3 +1,8 @@
+# uv related files
+uv.lock
+
+data/arc-aug-1000
+
 .DS_Store
 .idea
 .ipynb_checkpoints/
