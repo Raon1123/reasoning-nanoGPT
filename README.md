@@ -24,7 +24,7 @@ At `data/arc_agi`, we expect following structure:
 
 ```
 # ARC-AGI datasets
-
+OMP_NUM_THREADS=4 uv run torchrun --nproc_per_node=4 train_reasoning.py --config=config/reasoning_default.yaml
 ```
 
 ### Sudoku datasets
@@ -32,10 +32,13 @@ At `data/arc_agi`, we expect following structure:
 
 ## todos
 
+It should not mentioned below todos, find `TODO` comments in the code.
+
 - [ ] add training and evaluation scripts for reasoning tasks
 - [ ] upgrade nanochat model to support distributed training
 - [ ] add code tests... (not prioritized)
 - [ ] We can find our dataset class at `data/dataset.py`. It suppose that our memory budget is low... How to improve it e.g. memmap? 
+- [ ] `model/modelutils.py` we need to add more... resume training, save checkpoints or add more models such as HRM, TRM etc.
 
 
 ## acknowledgements

@@ -5,7 +5,7 @@ import os
 from tqdm import tqdm
 import numpy as np
 import tiktoken
-from datasets import load_dataset # huggingface datasets
+from data.puzzledatasets import load_dataset # huggingface datasets
 
 # number of workers in .map() call
 # good number to use is ~order number of cpu cores // 2

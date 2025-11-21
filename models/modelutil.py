@@ -14,7 +14,7 @@ def get_model(config: dict) -> Module:
     }
     
     model_config = config['MODEL']
-    model_name = model_config.get('model_type', 'nanogpt')
+    model_name = model_config.get('model_type', 'nanogpt').lower()
     
     if model_name not in model_map:
         raise ValueError(f"Unknown model type: {model_name}")
@@ -25,14 +25,8 @@ def get_model(config: dict) -> Module:
     model_cls = model_map[model_name]
     model = model_cls(model_config)
     
-    resume = model_config.get('resume', False)
-    if resume:
-        # TODO: Add logic to resume model training or loading here
-        pass
-    
-    compile_model = model_config.get('compile', False)
-    if compile_model:
-        model = torch.compile(model)
+    if config['MODEL'].get('resume', False):
+        model.load_state_dict(config['MODEL']['state_dict'])
     
     return model
 
@@ -40,7 +34,7 @@ def get_model(config: dict) -> Module:
 def get_optimizer(config: dict,
                   model: Module) -> torch.optim.Optimizer:
     optim_config = config['OPTIMIZER']
-    optim_name = optim_config.get('optimizer_type', 'adamw')
+    optim_name = optim_config.get('optimizer_type', 'adamw').lower()
     
     optim_map = {
         'adamw': torch.optim.AdamW,
@@ -55,11 +49,14 @@ def get_optimizer(config: dict,
     optimizer = optim_cls(model.parameters(),
                           **optim_config['config'])
     
+    if optim_config.get('resume', False):
+        optimizer.load_state_dict(optim_config['state_dict'])
+    
     return optimizer
 
 
 def get_scheduler(config: dict,
-                  optimizer: torch.optim.optimizer):
+                  optimizer: torch.optim.Optimizer) -> torch.optim.lr_scheduler._LRScheduler:
     scheduler_config = config['SCHEDULER']
     
     if 'SCHEDULER' not in config:
@@ -70,6 +67,7 @@ def get_scheduler(config: dict,
         'steplr': torch.optim.lr_scheduler.StepLR,
         'exponential': torch.optim.lr_scheduler.ExponentialLR,
         'reduceonplateau': torch.optim.lr_scheduler.ReduceLROnPlateau,
+        'compose': get_default_scheduler,
     }
     
     scheduler_name = scheduler_config.get('scheduler_type', 'cosine')
@@ -78,5 +76,25 @@ def get_scheduler(config: dict,
     
     sched_cls = sched_map[scheduler_name]
     scheduler = sched_cls(optimizer, **scheduler_config['config'])
+    
+    return scheduler
+
+
+def get_default_scheduler(optimizer: torch.optim.Optimizer,
+                          **kwargs):
+    warmup_iters = kwargs.get('warmup_iters', 2000)
+    lr_decay_iters = kwargs.get('lr_decay_iters', 60000)
+    min_lr = kwargs.get('min_lr', 6e-5)
+    
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[
+            # Warmup: linear increase from 0 to learning_rate over warmup_iters
+            torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=6.0e-4, end_factor=1.0, total_iters=warmup_iters),
+            # Decay: cosine annealing from learning_rate to min_lr over (lr_decay_iters - warmup_iters)
+            torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=lr_decay_iters - warmup_iters, eta_min=min_lr)
+    ],
+    milestones=[warmup_iters]  # Switch at warmup_iters
+    )
     
     return scheduler
