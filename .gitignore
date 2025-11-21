@@ -1,6 +1,9 @@
 # uv related files
 uv.lock
 
+# logging related files
+run/
+
 data/arc-aug-1000
 
 .DS_Store
