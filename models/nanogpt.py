@@ -114,6 +114,7 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    use_reward_head: bool = False # Whether to include a scalar reward head
 
 class GPT(nn.Module):
 
@@ -131,6 +132,12 @@ class GPT(nn.Module):
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        
+        # Optional reward head for TRM/HRM
+        self.reward_head = None
+        if hasattr(config, 'use_reward_head') and config.use_reward_head:
+            self.reward_head = nn.Linear(config.n_embd, 1, bias=False)
+
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
         # This behavior is deprecated and will be an error in future versions"
@@ -167,14 +174,23 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+    def forward(self, idx=None, targets=None, input_embeddings=None):
+        device = idx.device if idx is not None else input_embeddings.device
+        
+        if input_embeddings is not None:
+            b, t, _ = input_embeddings.size()
+        else:
+            b, t = idx.size()
+            assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        if input_embeddings is not None:
+            tok_emb = input_embeddings
+        else:
+            tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+            
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
@@ -189,8 +205,29 @@ class GPT(nn.Module):
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
+        
+        reward = None
+        if self.reward_head is not None:
+            reward = self.reward_head(x)
+            
+        return logits, loss, reward
 
-        return logits, loss
+    def extract_features(self, idx):
+        """
+        Run the transformer and return the last hidden state (features).
+        """
+        device = idx.device
+        b, t = idx.size()
+        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+
+        tok_emb = self.transformer.wte(idx)
+        pos_emb = self.transformer.wpe(pos)
+        x = self.transformer.drop(tok_emb + pos_emb)
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        return x
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary

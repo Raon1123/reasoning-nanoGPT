@@ -1,0 +1,46 @@
+system:
+  out_dir: 'out'
+  device: 'cuda'
+  dtype: 'bfloat16' # 'float32', 'bfloat16', or 'float16'
+  compile: true
+  backend: 'nccl'
+  init_from: 'scratch' # 'scratch', 'resume', 'gpt2*'
+
+data:
+  dataset: 'openwebtext'
+  gradient_accumulation_steps: 40 # 5 * 8
+  batch_size: 12
+  block_size: 1024
+
+model:
+  type: 'gpt' # 'gpt', 'nanochat', 'trm', 'hrm'
+  config:
+    n_layer: 12
+    n_head: 12
+    n_embd: 768
+    dropout: 0.0
+    bias: false
+
+optimizer:
+  learning_rate: 6.0e-4
+  max_iters: 600000
+  weight_decay: 1e-1
+  beta1: 0.9
+  beta2: 0.95
+  grad_clip: 1.0
+  decay_lr: true
+  warmup_iters: 2000
+  lr_decay_iters: 600000
+  min_lr: 6.0e-5
+
+logging:
+  eval_interval: 2000
+  log_interval: 1
+  eval_iters: 200
+  eval_only: false
+  always_save_checkpoint: true
+  wandb_log: false
+  wandb_project: 'reasoning-nanoGPT'
+  wandb_run_name: 'run'
+  tensorboard_log: true
+  tensorboard_dir: 'runs'
