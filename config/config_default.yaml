@@ -1,0 +1,52 @@
+device: cuda
+
+logging:
+  wandb_log: false
+  wandb_project: reasoning_nanoGPT
+  wandb_run_name: default_run
+  output_dir: outputs/
+  eval_only: false
+  eval_interval: 2000
+  log_interval: 1
+  eval_iters: 200
+  always_save_checkpoint: false
+  init_from: scratch  # options: scratch / resume 
+
+dataset:
+  data_root: data/arc_agi_aug1000
+  dataset: arc_agi1
+
+model:
+  type: nanoGPT
+  dtype: float16
+  compile: true
+  config:
+    n_layer: 8
+    n_head: 8
+    n_embd: 512
+    dropout: 0.0
+    bias: false
+
+training:
+  global_batch_size: 512
+  gradient_accumulation_steps: 40
+  block_size: 256
+  max_iters: 600000
+  optimizer:
+    type: adamw
+    config:
+      lr: 6e-4
+      betas: [0.9, 0.95]
+      weight_decay: 0.1
+    grad_clip: 1.0
+  scheduler:
+    type: compose
+    config:
+      schedulers:
+        - type: linear_warmup
+          config:
+            warmup_iters: 2000
+        - type: cosine_decay
+          config:
+            max_iters: 600000
+            min_lr: 6e-5

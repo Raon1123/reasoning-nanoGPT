@@ -28,39 +28,50 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
+from utils.toolkit import load_yaml
 
 # -----------------------------------------------------------------------------
-# default config values designed to train a gpt2 (124M) on OpenWebText
+# I modify these parts frequently, so I manage configs by yaml files and command line args
+
+def get_args():
+    import argparse
+    parser = argparse.ArgumentParser(description='Train a GPT model')
+    parser.add_argument('--config', type=str, default=None,
+                        help='Path to a config file (YAML) that specifies training parameters')
+    args = parser.parse_args()
+    return args
+
+args = get_args()
+config = load_yaml(args.config) if args.config is not None else {}
+
+logging_config = config.get('logging', {})
+data_config = config.get('dataset', {})
+model_config = config.get('model', {})
+training_config = config.get('training', {})
+
 # I/O
-out_dir = 'out'
-eval_interval = 2000
-log_interval = 1
-eval_iters = 200
-eval_only = False # if True, script exits right after the first eval
-always_save_checkpoint = True # if True, always save a checkpoint after each eval
-init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
+out_dir = logging_config.get('output_dir', './out')
+eval_interval = logging_config.get('eval_interval', 2000)
+log_interval = logging_config.get('log_interval', 1)
+eval_iters = logging_config.get('eval_iters', 200)
+eval_only = logging_config.get('eval_only', False) # if True, script exits right after the first eval
+always_save_checkpoint = logging_config.get('always_save_checkpoint', True) # if True, always save a checkpoint after each eval
+init_from = logging_config.get('init_from', 'scratch') # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = False # disabled by default
-wandb_project = 'owt'
-wandb_run_name = 'gpt2' # 'run' + str(time.time())
+wandb_log = logging_config.get('wandb_log', False) # disabled by default
+wandb_project = logging_config.get('wandb_project', 'owt')
+wandb_run_name = logging_config.get('wandb_run_name', 'gpt2') # 'run' + str(time.time())
 # data
-dataset = 'openwebtext'
-gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
-batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
-block_size = 1024
+dataset = data_config.get('dataset', 'openwebtext')
+gradient_accumulation_steps = training_config.get('gradient_accumulation_steps', 5 * 8) # used to simulate larger batch sizes
+batch_size = training_config.get('batch_size', 12) # TODO: fix it for manage by global batch_size if gradient_accumulation_steps > 1, this is the micro-batch size
+block_size = training_config.get('block_size', 512)
 # model
-n_layer = 12
-n_head = 12
-n_embd = 768
-dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
-bias = False # do we use bias inside LayerNorm and Linear layers?
+# Note that model config under model config
 # adamw optimizer
-learning_rate = 6e-4 # max learning rate
-max_iters = 600000 # total number of training iterations
-weight_decay = 1e-1
-beta1 = 0.9
-beta2 = 0.95
-grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+learning_rate = training_config.get('optimizer', {}).get('config', {}).get('lr', 6e-4) # max learning rate
+max_iters = training_config.get('max_iters', 600000) # total number of training iterations
+grad_clip = training_config.get('grad_clip', 1.0) # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
 decay_lr = True # whether to decay the learning rate
 warmup_iters = 2000 # how many steps to warm up for
@@ -70,12 +81,9 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
-compile = True # use PyTorch 2.0 to compile the model to be faster
-# -----------------------------------------------------------------------------
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
-exec(open('configurator.py').read()) # overrides from command line or config file
-config = {k: globals()[k] for k in config_keys} # will be useful for logging
+dtype = model_config.get('dtype', 'float16')
+compile = model_config.get('compile', True) # use PyTorch 2.0 to compile the model to be faster
+
 # -----------------------------------------------------------------------------
 
 # various inits, derived attributes, I/O setup
@@ -108,7 +116,7 @@ torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
 # note: float16 data type will automatically use a GradScaler
-ptdtype = {'float32': torch.float32, 'bfloat16': torch.bfloat16, 'float16': torch.float16}[dtype]
+ptdtype = {'float32': torch.float32, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
 # poor man's data loader
@@ -144,8 +152,12 @@ if os.path.exists(meta_path):
     print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # model init
-model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+#model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
+#                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+model_args = model_config.get('config', {})
+model_args['block_size'] = block_size
+model_args['vocab_size'] = None
+
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -181,7 +193,7 @@ elif init_from == 'resume':
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
     # initialize from OpenAI GPT-2 weights
-    override_args = dict(dropout=dropout)
+    override_args = dict(dropout=model_args.get('dropout', 0.0))
     model = GPT.from_pretrained(init_from, override_args)
     # read off the created config params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
@@ -196,7 +208,10 @@ model.to(device)
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
-optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
+optimizer_config = training_config.get('optimizer', {}).get('config', {})
+optimizer_config['device_type'] = device_type
+# TODO: I would like to add more optimizer such as Adam_Aten2 etc.
+optimizer = model.configure_optimizers(**optimizer_config)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
 checkpoint = None # free up memory
