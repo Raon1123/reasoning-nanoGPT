@@ -11,6 +11,8 @@ TODOS:
 
 ---
 
+- At `datasets/puzzle_dataset.py`, removed `set_name` and `global_effective_batch_size` from yielded values in `__iter__` method of `PuzzleDataset` class. What is the `puzzle_identifiers` for then?
+
 ## install
 
 This project library is managed by [uv](https://docs.astral.sh/uv/). To install it, first make sure you have `uv` installed (see the link for instructions). Then simply run:
