@@ -8,6 +8,7 @@ TODOS:
 - [ ]: In `train.py`, it hardcode about the configs. We must manage our configs with yaml or etc. (DON'T HARDCODE THE CONFIG FOR REPRODUCIBILITY)
 - [ ]: Use `float16` instead of `bfloat16` for better compatibility with GPUs.
 - [ ]: Add more optimizer such as Adam_Aten2 etc.
+- []: Make batch with `X,y` manner `X=[input puzzles, puzzle_identifiers]`
 
 ---
 
