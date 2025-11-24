@@ -9,11 +9,16 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+from typing import (
+    Optional, Union
+)
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+from utils.toolkit import trunc_normal_init_
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -105,23 +110,38 @@ class Block(nn.Module):
         x = x + self.mlp(self.ln_2(x))
         return x
 
+# FIXED: I modify 
 @dataclass
 class GPTConfig:
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 12
-    n_head: int = 12
-    n_embd: int = 768
+    n_layer: int = 8
+    n_head: int = 8
+    n_embd: int = 512
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    puzzle_emb_ndim: int = 0  # Added to support puzzle embeddings
+    
+    num_puzzle_identifiers: int = 0  # Added to support puzzle embeddings
 
 class GPT(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, 
+                 config):
         super().__init__()
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        
+        self.puzzle_emb_len = -(self.config.puzzle_emb_ndim // -self.config.n_embd)  # ceil div
+        if self.config.puzzle_emb_ndim > 0:
+            self.puzzle_emb = CastedSparseEmbedding(
+                num_embeddings=self.config.num_puzzle_identifiers,
+                embedding_dim=self.puzzle_emb_len,
+                batch_size=1,  # will be overridden in forward
+                init_std=0,
+                cast_to=torch.float32
+            )
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
@@ -136,6 +156,7 @@ class GPT(nn.Module):
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
+        
 
         # init all weights
         self.apply(self._init_weights)
@@ -167,16 +188,12 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
-        device = idx.device
-        b, t = idx.size()
-        assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
-
-        # forward the GPT model itself
-        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+    def forward(self, 
+                idx: torch.Tensor,
+                puzzle_idx: Union[torch.Tensor, None] = None,
+                targets: Union[torch.Tensor, None] = None):
+        x = self._input_embeddings(idx, puzzle_idx)
+        
         for block in self.transformer.h:
             x = block(x)
         x = self.transformer.ln_f(x)
@@ -191,6 +208,39 @@ class GPT(nn.Module):
             loss = None
 
         return logits, loss
+    
+    def _input_embeddings(self,
+                          idx: torch.Tensor,
+                          puzzle_idx: Union[torch.Tensor, None]) -> torch.Tensor:
+        device = idx.device
+
+        # normal embeddings here
+        b, t = idx.size()
+        assert t <= self.config.block_size, \
+            f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        
+        # forward the GPT model itself
+        tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
+        
+        # puzzle embeddings handle here
+        if self.config.puzzle_emb_ndim > 0:
+            puzzle_emb = self.puzzle_emb(puzzle_idx)  # shape (b, puzzle_emb_len)
+            
+            pad_count = self.puzzle_emb_len * self.config.n_embd - puzzle_emb.size(1)
+            if pad_count > 0:
+                puzzle_emb = F.pad(puzzle_emb, (0, pad_count), value=0.0)
+                
+            # concat to tkn emb
+            tok_emb = torch.cat(
+                (puzzle_emb.view(-1, self.puzzle_emb_len, self.config.n_embd), tok_emb),
+                dim=-2
+            )
+                
+        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
+        x = self.transformer.drop(tok_emb + pos_emb)
+        
+        return x
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
@@ -328,3 +378,33 @@ class GPT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
+
+class CastedSparseEmbedding(nn.Module):
+    def __init__(self, num_embeddings: int, embedding_dim: int, batch_size: int, init_std: float, cast_to: torch.dtype):
+        super().__init__()
+        self.cast_to = cast_to
+
+        # Real Weights
+        # Truncated LeCun normal init
+        self.weights = nn.Buffer(
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
+        )
+
+        # Local weights and IDs
+        # Local embeddings, with gradient, not persistent
+        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
+        # Local embedding IDs, not persistent
+        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        if not self.training:
+            # Test mode, no gradient
+            return self.weights[inputs].to(self.cast_to)
+            
+        # Training mode, fill puzzle embedding from weights
+        with torch.no_grad():
+            self.local_weights.copy_(self.weights[inputs])
+            self.local_ids.copy_(inputs)
+
+        return self.local_weights.to(self.cast_to)
