@@ -24,11 +24,47 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
+from torch.optim.lr_scheduler import LRScheduler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 from utils.toolkit import load_yaml
+
+class CosineWarmupScheduler(LRScheduler):
+    def __init__(self, optimizer, warmup_iters, lr_decay_iters, min_lr, max_lr, last_epoch=-1):
+        self.warmup_iters = warmup_iters
+        self.lr_decay_iters = lr_decay_iters
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        super().__init__(optimizer, last_epoch)
+
+    def get_lr(self):
+        it = self.last_epoch
+        if it < self.warmup_iters:
+            return [self.max_lr * (it + 1) / (self.warmup_iters + 1) for _ in self.optimizer.param_groups]
+        if it > self.lr_decay_iters:
+            return [self.min_lr for _ in self.optimizer.param_groups]
+        decay_ratio = (it - self.warmup_iters) / (self.lr_decay_iters - self.warmup_iters)
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+        return [self.min_lr + coeff * (self.max_lr - self.min_lr) for _ in self.optimizer.param_groups]
+
+    def state_dict(self):
+        state = super().state_dict()
+        state.update({
+            'warmup_iters': self.warmup_iters,
+            'lr_decay_iters': self.lr_decay_iters,
+            'min_lr': self.min_lr,
+            'max_lr': self.max_lr
+        })
+        return state
+
+    def load_state_dict(self, state):
+        super().load_state_dict(state)
+        self.warmup_iters = state.get('warmup_iters', self.warmup_iters)
+        self.lr_decay_iters = state.get('lr_decay_iters', self.lr_decay_iters)
+        self.min_lr = state.get('min_lr', self.min_lr)
+        self.max_lr = state.get('max_lr', self.max_lr)
 
 # -----------------------------------------------------------------------------
 # I modify these parts frequently, so I manage configs by yaml files and command line args
@@ -73,10 +109,11 @@ learning_rate = training_config.get('optimizer', {}).get('config', {}).get('lr',
 max_iters = training_config.get('max_iters', 600000) # total number of training iterations
 grad_clip = training_config.get('grad_clip', 1.0) # clip gradients at this value, or disable if == 0.0
 # learning rate decay settings
-decay_lr = True # whether to decay the learning rate
-warmup_iters = 2000 # how many steps to warm up for
-lr_decay_iters = 600000 # should be ~= max_iters per Chinchilla
-min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchilla
+scheduler_config = training_config.get('scheduler', {})
+warmup_iters = scheduler_config.get('warmup_iters', 2000)
+lr_decay_iters = scheduler_config.get('lr_decay_iters', 600000)
+min_lr = scheduler_config.get('min_lr', 6e-5)
+decay_lr = training_config.get('decay_lr', True)
 # DDP settings
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
@@ -190,14 +227,7 @@ elif init_from == 'resume':
     model.load_state_dict(state_dict)
     iter_num = checkpoint['iter_num']
     best_val_loss = checkpoint['best_val_loss']
-elif init_from.startswith('gpt2'):
-    print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    # initialize from OpenAI GPT-2 weights
-    override_args = dict(dropout=model_args.get('dropout', 0.0))
-    model = GPT.from_pretrained(init_from, override_args)
-    # read off the created config params, so we can store them into checkpoint correctly
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = getattr(model.config, k)
+
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
     model.crop_block_size(block_size)
@@ -214,6 +244,10 @@ optimizer_config['device_type'] = device_type
 optimizer = model.configure_optimizers(**optimizer_config)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
+if decay_lr:
+    scheduler = CosineWarmupScheduler(optimizer, warmup_iters, lr_decay_iters, min_lr, learning_rate)
+    if init_from == 'resume':
+        scheduler.load_state_dict(checkpoint['scheduler'])
 checkpoint = None # free up memory
 
 # compile the model
@@ -242,20 +276,6 @@ def estimate_loss():
     model.train()
     return out
 
-# learning rate decay scheduler (cosine with warmup)
-def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * (it + 1) / (warmup_iters + 1)
-    # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
-
 # logging
 if wandb_log and master_process:
     import wandb
@@ -270,7 +290,11 @@ running_mfu = -1.0
 while True:
 
     # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
+    if decay_lr:
+        scheduler.last_epoch = iter_num
+        lr = scheduler.get_lr()[0]
+    else:
+        lr = learning_rate
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -296,6 +320,7 @@ while True:
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                     'config': config,
+                    'scheduler': scheduler.state_dict() if decay_lr else None,
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
