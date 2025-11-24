@@ -7,6 +7,7 @@ out/
 
 # about testing
 .pytest_cache/
+processed_data/
 
 data/arc-aug-1000
 

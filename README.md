@@ -31,6 +31,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 </details>
 
+### Prepare datasets
+
+see subdirectory `data/` for dataset preparation scripts.
+
 ## quick start
 
 

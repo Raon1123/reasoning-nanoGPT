@@ -95,7 +95,17 @@ class PuzzleDataset(IterableDataset):
         self._iters = 0
         
     def __iter__(self):
-        pass
+        worker_info = get_worker_info()
+        assert worker_info is None or worker_info.num_workers == 1, \
+            "Multithreaded data loading is not currently supported."
+        
+        self._lazy_load_dataset()
+        
+        # Iterate using specified mode
+        if self.config.test_set_mode:
+            yield from self._iter_test()
+        else:
+            yield from self._iter_train()
     
     def _lazy_load_dataset(self):
         if self._data is not None:

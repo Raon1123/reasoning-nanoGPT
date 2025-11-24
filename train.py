@@ -41,7 +41,7 @@ from datasets.datautils import get_dataset
 def get_args():
     import argparse
     parser = argparse.ArgumentParser(description='Train a GPT model')
-    parser.add_argument('--config', type=str, default=None,
+    parser.add_argument('--config', '-c', type=str, default='config/config_default.yaml',
                         help='Path to a config file (YAML) that specifies training parameters')
     args = parser.parse_args()
     return args
@@ -170,13 +170,7 @@ iter_num = 0
 best_val_loss = 1e9
 
 # attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, 'meta.pkl')
-meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    meta_vocab_size = meta['vocab_size']
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
+meta_vocab_size = 12
 
 # model init
 #model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -225,7 +219,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer_config = training_config.get('optimizer', {}).get('config', {})
@@ -259,7 +253,9 @@ def estimate_loss():
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y, puzzele_id = get_batch(split)
-            with ctx:
+            # I should not understand why with ctx here causes some problem
+            # min max of Y
+            with torch.inference_mode():
                 logits, loss = model(X, puzzle_id, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
