@@ -24,47 +24,16 @@ from contextlib import nullcontext
 
 import numpy as np
 import torch
-from torch.optim.lr_scheduler import LRScheduler
+
+from torch.utils.data import DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 from utils.toolkit import load_yaml
 
-class CosineWarmupScheduler(LRScheduler):
-    def __init__(self, optimizer, warmup_iters, lr_decay_iters, min_lr, max_lr, last_epoch=-1):
-        self.warmup_iters = warmup_iters
-        self.lr_decay_iters = lr_decay_iters
-        self.min_lr = min_lr
-        self.max_lr = max_lr
-        super().__init__(optimizer, last_epoch)
-
-    def get_lr(self):
-        it = self.last_epoch
-        if it < self.warmup_iters:
-            return [self.max_lr * (it + 1) / (self.warmup_iters + 1) for _ in self.optimizer.param_groups]
-        if it > self.lr_decay_iters:
-            return [self.min_lr for _ in self.optimizer.param_groups]
-        decay_ratio = (it - self.warmup_iters) / (self.lr_decay_iters - self.warmup_iters)
-        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
-        return [self.min_lr + coeff * (self.max_lr - self.min_lr) for _ in self.optimizer.param_groups]
-
-    def state_dict(self):
-        state = super().state_dict()
-        state.update({
-            'warmup_iters': self.warmup_iters,
-            'lr_decay_iters': self.lr_decay_iters,
-            'min_lr': self.min_lr,
-            'max_lr': self.max_lr
-        })
-        return state
-
-    def load_state_dict(self, state):
-        super().load_state_dict(state)
-        self.warmup_iters = state.get('warmup_iters', self.warmup_iters)
-        self.lr_decay_iters = state.get('lr_decay_iters', self.lr_decay_iters)
-        self.min_lr = state.get('min_lr', self.min_lr)
-        self.max_lr = state.get('max_lr', self.max_lr)
+from models.scheduler import NanoGPTScheduler as CosineWarmupScheduler
+from datasets.datautils import get_dataset
 
 # -----------------------------------------------------------------------------
 # I modify these parts frequently, so I manage configs by yaml files and command line args
@@ -156,24 +125,45 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# poor man's data loader
-data_dir = os.path.join('data', dataset)
+# FIXIT: I modify these parts with Torch loader
+train_epochs_per_iter = eval_interval if eval_interval is not None else max_iters
+config['dataset']['config']['epochs_per_iter'] = train_epochs_per_iter
+config['dataset']['config']['rank'] = ddp_rank if ddp else 0
+config['dataset']['config']['num_replicas'] = ddp_world_size if ddp else 1
+trn_dataset = get_dataset(config.copy(), split='train')
+config['dataset']['config']['epochs_per_iter'] = 1
+tst_dataset = get_dataset(config.copy(), split='test')
+
+trn_loader = DataLoader(
+    trn_dataset,
+    batch_size=None, # managed by the dataset
+    num_workers=1,
+    prefetch_factor=8,
+    pin_memory=True,
+    persistent_workers=True,
+)
+tst_loader = DataLoader(
+    tst_dataset,
+    batch_size=None, # managed by the dataset
+    num_workers=1,
+    prefetch_factor=8,
+    pin_memory=True,
+    persistent_workers=True,
+)
+
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
-    else:
-        x, y = x.to(device), y.to(device)
-    return x, y
+    data_loader = trn_loader if split == 'train' else tst_loader
+    
+    # dataset is iterabledataset
+    # batch contains three keys : inputs, labels, puzzle_identifiers
+    batch = next(iter(data_loader))
+    batch = {k: v.to(device=device, non_blocking=True) for k, v in batch.items()}
+    
+    # FIXIT: X contains inputs and puzzle_identifiers
+    
+    return batch['inputs'], batch['labels'], batch['puzzle_identifiers']
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -268,7 +258,7 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y = get_batch(split)
+            X, Y, puzzele_id = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
@@ -282,21 +272,20 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
-X, Y = get_batch('train') # fetch the very first batch
+X, Y, puzzle_id = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
-while True:
+for epoch in range(max_iters):
 
     # determine and set the learning rate for this iteration
     if decay_lr:
-        scheduler.last_epoch = iter_num
-        lr = scheduler.get_lr()[0]
+        scheduler.step()
     else:
-        lr = learning_rate
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = learning_rate
+    lr = optimizer.param_groups[0]['lr']
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
@@ -340,7 +329,7 @@ while True:
             logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y = get_batch('train')
+        X, Y, puzzle_id = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient
@@ -367,10 +356,6 @@ while True:
         print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
     iter_num += 1
     local_iter_num += 1
-
-    # termination conditions
-    if iter_num > max_iters:
-        break
 
 if ddp:
     destroy_process_group()

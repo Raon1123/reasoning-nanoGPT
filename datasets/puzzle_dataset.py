@@ -17,6 +17,32 @@ from torch.utils.data import IterableDataset, get_worker_info
 
 from utils.const import IGNORE_LABEL_ID
 
+def _sample_batch(rng: np.random.Generator, group_order: np.ndarray, puzzle_indices: np.ndarray, group_indices: np.ndarray, start_index: int, global_batch_size: int):
+    # Pack examples into a full batch
+    batch = []
+    batch_puzzle_indices = []
+    current_size = 0
+
+    while (start_index < group_order.size) and (current_size < global_batch_size):
+        # Pick a group and a puzzle from that group
+        group_id = group_order[start_index]
+        puzzle_id = rng.integers(group_indices[group_id], group_indices[group_id + 1])
+        start_index += 1
+
+        # Get range of the puzzle
+        puzzle_start = puzzle_indices[puzzle_id]
+        puzzle_size = int(puzzle_indices[puzzle_id + 1] - puzzle_start)
+
+        append_size = min(puzzle_size, global_batch_size - current_size)
+
+        # Put into batch
+        batch_puzzle_indices.append(np.full(append_size, puzzle_id, dtype=np.int32))
+        batch.append(puzzle_start + np.random.choice(puzzle_size, append_size, replace=False))
+
+        current_size += append_size
+
+    return start_index, np.concatenate(batch), np.concatenate(batch_puzzle_indices)
+
 class PuzzleDatasetConfig(pydantic.BaseModel):
     seed: int
     dataset_path: str

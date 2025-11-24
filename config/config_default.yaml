@@ -13,8 +13,11 @@ logging:
   init_from: scratch  # options: scratch / resume 
 
 dataset:
-  data_root: data/arc_agi_aug1000
-  dataset: arc_agi1
+  type: arc_agi1
+  config:
+    seed: 42
+    data_root: data/arc_agi_aug1000
+  
 
 model:
   type: nanoGPT
