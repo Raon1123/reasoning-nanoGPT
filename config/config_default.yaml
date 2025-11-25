@@ -6,7 +6,7 @@ logging:
   wandb_run_name: back_to_the_nano
   output_dir: outputs/
   eval_only: false
-  eval_interval: 2000
+  eval_interval: 100
   log_interval: 1
   eval_iters: 200
   always_save_checkpoint: false
