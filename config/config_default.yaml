@@ -34,6 +34,7 @@ training:
   gradient_accumulation_steps: 40
   block_size: 900
   max_iters: 600000
+  decay_lr: true
   optimizer:
     type: adamw
     config:

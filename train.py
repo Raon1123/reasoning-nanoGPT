@@ -127,16 +127,19 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', 'arc_agi', 'processed_data')
+
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     
     split_root = os.path.join(data_dir, split)
     
-    X = np.memmap(os.path.join(split_root, 'all__inputs.npy'), dtype=np.uint8, mode='r')
-    y = np.memmap(os.path.join(split_root, 'all__labels.npy'), dtype=np.uint8, mode='r')
-    puzzle_identifiers = np.memmap(os.path.join(split_root, 'all__puzzle_identifiers.npy'), dtype=np.int32, mode='r')
-    puzzle_indicies = np.memmap(os.path.join(split_root, 'all__puzzle_indices.npy'), dtype=np.int32, mode='r')
+    # shape of X and y is (num_samples, block_size)
+    X = np.load(os.path.join(split_root, 'all__inputs.npy'), mmap_mode='r')
+    y = np.load(os.path.join(split_root, 'all__labels.npy'), mmap_mode='r')
+
+    puzzle_identifiers = np.load(os.path.join(split_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
+    puzzle_indicies = np.load(os.path.join(split_root, 'all__puzzle_indices.npy'), mmap_mode='r')
     
     ix = torch.randint(len(X), (batch_size,))
     # ix is a tensor of shape (batch_size,)
@@ -305,7 +308,7 @@ if master_process:
 for epoch in tqdm_range:
 
     # determine and set the learning rate for this iteration
-    lr = get_lr(iter_num) if decay_lr else learning_rate
+    lr = get_lr(iter_num) 
     for param_group in optimizer.param_groups:
         param_group['lr'] = learning_rate
     lr = optimizer.param_groups[0]['lr']
@@ -313,7 +316,7 @@ for epoch in tqdm_range:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: " + ", ".join([f"{k} {v:.4f}" for k,v in losses.items()]))
+        print(f"step {iter_num}: " + ", ".join([f"{k} {v:.4f}" for k,v in losses.items()]+[f"lr {lr:.6f}"]))
         if wandb_log:
             # append losses
             wandb_log = {
