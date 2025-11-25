@@ -4,6 +4,7 @@ uv.lock
 # logging related files
 runs/
 out/
+wandb/
 
 # about testing
 .pytest_cache/

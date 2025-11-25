@@ -33,6 +33,7 @@ from model import GPTConfig, GPT
 from utils.toolkit import load_yaml
 
 from models.scheduler import NanoGPTScheduler as CosineWarmupScheduler
+from utils.const import IGNORE_LABEL_ID
 
 # -----------------------------------------------------------------------------
 # I modify these parts frequently, so I manage configs by yaml files and command line args
@@ -243,14 +244,35 @@ def estimate_loss():
     model.eval()
     for split in ['train', 'test']:
         losses = torch.zeros(eval_iters)
+        valid_puzzle_counts = 0
+        pixel_accuracies = torch.zeros(eval_iters)
+        exact_corrects = 0
+        
         for k in range(eval_iters):
             X, Y, puzzle_id = get_batch(split)
             # I should not understand why with ctx here causes some problem
             # min max of Y
             with torch.inference_mode():
                 logits, loss = model(X, puzzle_id, Y)
+                
+                # for calculate accuracy
+                mask = (Y != IGNORE_LABEL_ID)
+                preds = torch.argmax(logits, dim=-1)
+                
+                # correct per token (pixel)
+                correct = (preds == Y) & mask
+                accuracy = correct.sum().item() / mask.sum().item()
+                
+                # correct per all of sequence
+                sequence_is_correct = correct.sum(-1) == mask.sum(-1)
             losses[k] = loss.item()
-        out[split] = losses.mean()
+            pixel_accuracies[k] = accuracy
+            exact_corrects += sequence_is_correct.sum().item()
+            valid_puzzle_counts += X.size(0)
+            
+        out[f'{split}/loss'] = losses.mean()
+        out[f'{split}/accuracy'] = pixel_accuracies.mean().item()
+        out[f'{split}/sequence_accuracy'] = exact_corrects / valid_puzzle_counts
     model.train()
     return out
 
@@ -265,7 +287,12 @@ t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
-for epoch in range(max_iters):
+tqdm_range = range(max_iters)
+if master_process:
+    from tqdm import tqdm
+    tqdm_range = tqdm(tqdm_range, initial=iter_num, total=max_iters)
+
+for epoch in tqdm_range:
 
     # determine and set the learning rate for this iteration
     if decay_lr:
@@ -278,17 +305,18 @@ for epoch in range(max_iters):
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, test loss {losses['test']:.4f}")
+        print(f"step {iter_num}: " + ", ".join([f"{k} {v:.4f}" for k,v in losses.items()]))
         if wandb_log:
-            wandb.log({
+            # append losses
+            wandb_log = {
                 "iter": iter_num,
-                "train/loss": losses['train'],
-                "test/loss": losses['test'],
                 "lr": lr,
-                "mfu": running_mfu*100, # convert to percentage
-            })
-        if losses['test'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['test']
+            }
+            wandb_log.update(losses)
+
+            wandb.log(wandb_log)
+        if losses['val/loss'] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses['val/loss']
             if iter_num > 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
