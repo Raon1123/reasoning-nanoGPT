@@ -315,8 +315,8 @@ for epoch in tqdm_range:
             wandb_log.update(losses)
 
             wandb.log(wandb_log)
-        if losses['val/loss'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val/loss']
+        if losses['test/loss'] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses['test/loss']
             if iter_num > 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
