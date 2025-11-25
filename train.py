@@ -241,7 +241,7 @@ if ddp:
 def estimate_loss():
     out = {}
     model.eval()
-    for split in ['train', 'val']:
+    for split in ['train', 'test']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
             X, Y, puzzle_id = get_batch(split)
@@ -278,17 +278,17 @@ for epoch in range(max_iters):
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(f"step {iter_num}: train loss {losses['train']:.4f}, test loss {losses['test']:.4f}")
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
                 "train/loss": losses['train'],
-                "val/loss": losses['val'],
+                "test/loss": losses['test'],
                 "lr": lr,
                 "mfu": running_mfu*100, # convert to percentage
             })
-        if losses['val'] < best_val_loss or always_save_checkpoint:
-            best_val_loss = losses['val']
+        if losses['test'] < best_val_loss or always_save_checkpoint:
+            best_val_loss = losses['test']
             if iter_num > 0:
                 checkpoint = {
                     'model': raw_model.state_dict(),
