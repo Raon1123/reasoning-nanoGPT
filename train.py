@@ -33,7 +33,6 @@ from model import GPTConfig, GPT
 from utils.toolkit import load_yaml
 
 from models.scheduler import NanoGPTScheduler as CosineWarmupScheduler
-from datasets.datautils import get_dataset
 
 # -----------------------------------------------------------------------------
 # I modify these parts frequently, so I manage configs by yaml files and command line args
@@ -125,45 +124,41 @@ device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.aut
 ptdtype = {'float32': torch.float32, 'float16': torch.float16}[dtype]
 ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
 
-# FIXIT: I modify these parts with Torch loader
-train_epochs_per_iter = eval_interval if eval_interval is not None else max_iters
-config['dataset']['config']['epochs_per_iter'] = train_epochs_per_iter
-config['dataset']['config']['rank'] = ddp_rank if ddp else 0
-config['dataset']['config']['num_replicas'] = ddp_world_size if ddp else 1
-trn_dataset = get_dataset(config.copy(), split='train')
-config['dataset']['config']['epochs_per_iter'] = 1
-tst_dataset = get_dataset(config.copy(), split='test')
-
-trn_loader = DataLoader(
-    trn_dataset,
-    batch_size=None, # managed by the dataset
-    num_workers=1,
-    prefetch_factor=8,
-    pin_memory=True,
-    persistent_workers=True,
-)
-tst_loader = DataLoader(
-    tst_dataset,
-    batch_size=None, # managed by the dataset
-    num_workers=1,
-    prefetch_factor=8,
-    pin_memory=True,
-    persistent_workers=True,
-)
-
+# poor man's data loader
+data_dir = os.path.join('data', 'arc_agi', 'processed_data')
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    data_loader = trn_loader if split == 'train' else tst_loader
     
-    # dataset is iterabledataset
-    # batch contains three keys : inputs, labels, puzzle_identifiers
-    batch = next(iter(data_loader))
-    batch = {k: v.to(device=device, non_blocking=True) for k, v in batch.items()}
+    split_root = os.path.join(data_dir, split)
     
-    # FIXIT: X contains inputs and puzzle_identifiers
+    X = np.memmap(os.path.join(split_root, 'all__inputs.npy'), dtype=np.uint8, mode='r')
+    y = np.memmap(os.path.join(split_root, 'all__labels.npy'), dtype=np.uint8, mode='r')
+    puzzle_identifiers = np.memmap(os.path.join(split_root, 'all__puzzle_identifiers.npy'), dtype=np.int32, mode='r')
+    puzzle_indicies = np.memmap(os.path.join(split_root, 'all__puzzle_indicies.npy'), dtype=np.int32, mode='r')
     
-    return batch['inputs'], batch['labels'], batch['puzzle_identifiers']
+    ix = torch.randint(len(X) - block_size, (batch_size,))
+    x = torch.stack([torch.from_numpy((X[i:i+block_size]).astype(np.int64)) for i in ix])
+    y = torch.stack([torch.from_numpy((y[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    puzzle_ids = torch.zeros(batch_size, dtype=torch.int32)
+    
+    # get puzzle_identifiers from `puzzle_identifiers` and `puzzle_indicies`
+    # puzzle indicies are sorted manner with start and end points 
+    for i, target_idx in enumerate(ix):
+        # we need to find i such that puzzle_indicies[i] <= idx < puzzle_indicies[i+1]
+        for search in range(len(puzzle_indicies)-1):
+            if puzzle_indicies[search] <= target_idx < puzzle_indicies[search+1]:
+                puzzle_ids[i] = puzzle_identifiers[search]
+                break
+    
+    if device_type == 'cuda':
+        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
+        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        puzzle_ids = puzzle_ids.pin_memory().to(device, non_blocking=True)
+    else:
+        x, y = x.to(device), y.to(device)
+        puzzle_ids = puzzle_ids.to(device)
+    return x, y, puzzle_ids
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -252,7 +247,7 @@ def estimate_loss():
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
         for k in range(eval_iters):
-            X, Y, puzzele_id = get_batch(split)
+            X, Y, puzzle_id = get_batch(split)
             # I should not understand why with ctx here causes some problem
             # min max of Y
             with torch.inference_mode():
