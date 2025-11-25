@@ -30,7 +30,7 @@ model:
     bias: false
 
 training:
-  global_batch_size: 512
+  batch_size: 128
   gradient_accumulation_steps: 40
   block_size: 900
   max_iters: 600000
