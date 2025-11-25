@@ -3,7 +3,7 @@ device: cuda
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: back_to_the_nano
+  wandb_run_name: smol
   output_dir: outputs/
   eval_only: false
   eval_interval: 100
@@ -23,9 +23,9 @@ model:
   dtype: float16
   compile: true
   config:
-    n_layer: 8
+    n_layer: 2
     n_head: 8
-    n_embd: 512
+    n_embd: 128
     dropout: 0.0
     bias: false
 

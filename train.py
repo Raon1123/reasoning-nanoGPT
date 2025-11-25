@@ -138,9 +138,11 @@ def get_batch(split):
     puzzle_identifiers = np.memmap(os.path.join(split_root, 'all__puzzle_identifiers.npy'), dtype=np.int32, mode='r')
     puzzle_indicies = np.memmap(os.path.join(split_root, 'all__puzzle_indices.npy'), dtype=np.int32, mode='r')
     
-    ix = torch.randint(len(X) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((X[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((y[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    ix = torch.randint(len(X), (batch_size,))
+    # ix is a tensor of shape (batch_size,)
+    # we sample from ix
+    x = torch.from_numpy(X[ix.numpy()].astype(np.int64)).contiguous()
+    y = torch.from_numpy(y[ix.numpy()].astype(np.int64)).contiguous()
     
     # get puzzle_identifiers from `puzzle_identifiers` and `puzzle_indicies`
     # puzzle indicies are sorted manner with start and end points 
@@ -221,10 +223,18 @@ optimizer_config['device_type'] = device_type
 optimizer = model.configure_optimizers(**optimizer_config)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
-if decay_lr:
-    scheduler = CosineWarmupScheduler(optimizer, warmup_iters, lr_decay_iters, min_lr, learning_rate)
-    if init_from == 'resume':
-        scheduler.load_state_dict(checkpoint['scheduler'])
+def get_lr(it):
+    # 1) linear warmup for warmup_iters steps
+    if it < warmup_iters:
+        return learning_rate * (it + 1) / (warmup_iters + 1)
+    # 2) if it > lr_decay_iters, return min learning rate
+    if it > lr_decay_iters:
+        return min_lr
+    # 3) in between, use cosine decay down to min learning rate
+    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    assert 0 <= decay_ratio <= 1
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    return min_lr + coeff * (learning_rate - min_lr)
 checkpoint = None # free up memory
 
 # compile the model
@@ -295,11 +305,9 @@ if master_process:
 for epoch in tqdm_range:
 
     # determine and set the learning rate for this iteration
-    if decay_lr:
-        scheduler.step()
-    else:
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = learning_rate
+    lr = get_lr(iter_num) if decay_lr else learning_rate
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = learning_rate
     lr = optimizer.param_groups[0]['lr']
 
     # evaluate the loss on train/val sets and write checkpoints
@@ -325,7 +333,7 @@ for epoch in tqdm_range:
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                     'config': config,
-                    'scheduler': scheduler.state_dict() if decay_lr else None,
+                    #'scheduler': scheduler.state_dict() if decay_lr else None,
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
