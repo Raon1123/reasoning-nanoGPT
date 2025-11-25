@@ -39,3 +39,8 @@ see subdirectory `data/` for dataset preparation scripts.
 
 
 
+```bash
+OMP_NUM_THREADS=4 uv run torchrun --nproc_per_node=4 train.py --config config/config_default.yaml
+```
+
+

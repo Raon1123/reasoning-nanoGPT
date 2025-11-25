@@ -135,21 +135,18 @@ def get_batch(split):
     X = np.memmap(os.path.join(split_root, 'all__inputs.npy'), dtype=np.uint8, mode='r')
     y = np.memmap(os.path.join(split_root, 'all__labels.npy'), dtype=np.uint8, mode='r')
     puzzle_identifiers = np.memmap(os.path.join(split_root, 'all__puzzle_identifiers.npy'), dtype=np.int32, mode='r')
-    puzzle_indicies = np.memmap(os.path.join(split_root, 'all__puzzle_indicies.npy'), dtype=np.int32, mode='r')
+    puzzle_indicies = np.memmap(os.path.join(split_root, 'all__puzzle_indices.npy'), dtype=np.int32, mode='r')
     
     ix = torch.randint(len(X) - block_size, (batch_size,))
     x = torch.stack([torch.from_numpy((X[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((y[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
-    puzzle_ids = torch.zeros(batch_size, dtype=torch.int32)
     
     # get puzzle_identifiers from `puzzle_identifiers` and `puzzle_indicies`
     # puzzle indicies are sorted manner with start and end points 
-    for i, target_idx in enumerate(ix):
-        # we need to find i such that puzzle_indicies[i] <= idx < puzzle_indicies[i+1]
-        for search in range(len(puzzle_indicies)-1):
-            if puzzle_indicies[search] <= target_idx < puzzle_indicies[search+1]:
-                puzzle_ids[i] = puzzle_identifiers[search]
-                break
+    ix_np = ix.numpy()
+    searches = np.searchsorted(puzzle_indicies, ix_np, side='right') - 1
+    searches = np.clip(searches, 0, len(puzzle_identifiers) - 1)
+    puzzle_ids = torch.from_numpy(puzzle_identifiers[searches]).to(dtype=torch.int32)
     
     if device_type == 'cuda':
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
