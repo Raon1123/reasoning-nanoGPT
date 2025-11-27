@@ -13,7 +13,9 @@ from typing import (
 import numpy as np
 import pydantic
 import torch
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import (
+    IterableDataset, Dataset, get_worker_info
+)
 
 from utils.const import IGNORE_LABEL_ID
 
@@ -238,9 +240,6 @@ class PuzzleDataset(IterableDataset):
     def _check_inputs(self):
         assert self.config.global_batch_size % self.config.num_replicas == 0, \
             f"Global batch size {self.config.global_batch_size} must be multiples of nodes {self.config.num_replicas}."
-    
-    
-
 
 
 def dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
@@ -268,3 +267,27 @@ def dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
     
 def inverse_dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
     return dihedral_transform(arr, DIHEDRAL_INVERSE[tid])
+
+
+class NaiveDataset(Dataset):
+    def __init__(self, data_root: str):
+        super().__init__()
+
+        self.X = np.load(os.path.join(data_root, 'all_inputs.npy'), mmap_mode='r')
+        self.Y = np.load(os.path.join(data_root, 'all_labels.npy'), mmap_mode='r')
+        
+        puzzle_identifiers = np.load(os.path.join(data_root, 'all_puzzle_identifiers.npy'), mmap_mode='r')
+        puzzle_indices = np.load(os.path.join(data_root, 'all_puzzle_indices.npy'), mmap_mode='r')
+        
+        self.puzzle_ids = []
+        for i in range(len(puzzle_indices) - 1):
+            start = puzzle_indices[i]
+            end = puzzle_indices[i + 1]
+            self.puzzle_ids.extend([puzzle_identifiers[i]] * (end - start))
+        self.puzzle_ids = np.array(self.puzzle_ids, dtype=np.int32)
+
+    def __len__(self):
+        return len(self.puzzle_ids)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.Y[idx], self.puzzle_ids[idx]
