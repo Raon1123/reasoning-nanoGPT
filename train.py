@@ -139,6 +139,10 @@ lengths = trn_puzzle_indicies[1:] - trn_puzzle_indicies[:-1]
 indices = np.arange(len(lengths))
 trn_puzzle_indexes = np.repeat(indices, lengths)
 
+trn_meta = load_yaml(os.path.join(trn_root, 'dataset.yaml'))
+meta_vocab_size = trn_meta.get('vocab_size', 12)
+ignore_label_id = trn_meta.get('ignore_label_id', IGNORE_LABEL_ID)
+
 tst_X = np.load(os.path.join(tst_root, 'all__inputs.npy'), mmap_mode='r')
 tst_y = np.load(os.path.join(tst_root, 'all__labels.npy'), mmap_mode='r')
 tst_puzzle_identifiers = np.load(os.path.join(tst_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
@@ -177,14 +181,15 @@ iter_num = 0
 best_val_loss = 1e9
 
 # attempt to derive vocab_size from the dataset
-meta_vocab_size = 12
+
 
 # model init
 #model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
 #                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
 model_args = model_config.get('config', {})
 model_args['block_size'] = block_size
-model_args['vocab_size'] = 12
+model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 12
+model_args['ignore_label_id'] = ignore_label_id
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -234,11 +239,7 @@ optimizer = model.configure_optimizers(**optimizer_config)
 if init_from == 'resume':
     optimizer.load_state_dict(checkpoint['optimizer'])
     
-
-
 checkpoint = None # free up memory
-
-
 
 # compile the model
 if compile:
@@ -269,7 +270,7 @@ def estimate_loss():
                 logits, loss = model(X, puzzle_id, Y)
                 
                 # for calculate accuracy
-                mask = (Y != IGNORE_LABEL_ID)
+                mask = (Y != ignore_label_id)
                 preds = torch.argmax(logits, dim=-1)
                 
                 # correct per token (pixel)

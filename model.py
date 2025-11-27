@@ -119,10 +119,12 @@ class GPTConfig:
     n_head: int = 8
     n_embd: int = 512
     dropout: float = 0.0
+    sparsity: float = 0.0  # Added to support sparse loss
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     puzzle_emb_ndim: int = 0  # Added to support puzzle embeddings
     
     num_puzzle_identifiers: int = 0  # Added to support puzzle embeddings
+    ignore_label_id: int = -100  # Added to support sparse loss
 
 class GPT(nn.Module):
 
@@ -203,7 +205,15 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             # range of logits and targets is (B, T, C) and (B, T) respectively
             
-            loss = F.cross_entropy(logits.to(torch.float32).view(-1, logits.size(-1)), targets.to(torch.long).view(-1), ignore_index=-100).squeeze(-1)
+            if self.config.sparsity < 1.0:
+                # randomly mask out some targets for sparse loss computation
+                B, T = targets.size()
+                mask = (torch.rand(B, T, device=targets.device) < self.config.sparsity)
+                sparse_logits = logits.masked_select(mask.unsqueeze(-1)).view(-1, logits.size(-1))
+                sparse_targets = targets.masked_fill(~mask, self.config.ignore_label_id)
+                loss = F.cross_entropy(sparse_logits.to(torch.float32), sparse_targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
+            else:
+                loss = F.cross_entropy(logits.to(torch.float32).view(-1, logits.size(-1)), targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
