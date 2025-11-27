@@ -128,31 +128,40 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 # poor man's data loader
 data_dir = os.path.join('data', 'arc_agi', 'processed_data')
 
+trn_root = os.path.join(data_dir, 'train')
+tst_root = os.path.join(data_dir, 'test')
+
+trn_X = np.load(os.path.join(trn_root, 'all__inputs.npy'), mmap_mode='r')
+trn_y = np.load(os.path.join(trn_root, 'all__labels.npy'), mmap_mode='r')
+trn_puzzle_identifiers = np.load(os.path.join(trn_root, 'all__puzzle_identifiers.npy'), mmap_mode='r') # actual puzzle IDs
+trn_puzzle_indicies = np.load(os.path.join(trn_root, 'all__puzzle_indices.npy'), mmap_mode='r') # start/end indices for each puzzle in the dataset
+lengths = trn_puzzle_indicies[1:] - trn_puzzle_indicies[:-1]
+indices = np.arange(len(lengths))
+trn_puzzle_indexes = np.repeat(indices, lengths)
+
+tst_X = np.load(os.path.join(tst_root, 'all__inputs.npy'), mmap_mode='r')
+tst_y = np.load(os.path.join(tst_root, 'all__labels.npy'), mmap_mode='r')
+tst_puzzle_identifiers = np.load(os.path.join(tst_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
+tst_puzzle_indicies = np.load(os.path.join(tst_root, 'all__puzzle_indices.npy'), mmap_mode='r')
+lengths = tst_puzzle_indicies[1:] - tst_puzzle_indicies[:-1]
+indices = np.arange(len(lengths))
+tst_puzzle_indexes = np.repeat(indices, lengths)
+
+
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    
-    split_root = os.path.join(data_dir, split)
-    
-    # shape of X and y is (num_samples, block_size)
-    X = np.load(os.path.join(split_root, 'all__inputs.npy'), mmap_mode='r')
-    y = np.load(os.path.join(split_root, 'all__labels.npy'), mmap_mode='r')
-
-    puzzle_identifiers = np.load(os.path.join(split_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
-    puzzle_indicies = np.load(os.path.join(split_root, 'all__puzzle_indices.npy'), mmap_mode='r')
-    
-    ix = torch.randint(len(X), (batch_size,))
-    # ix is a tensor of shape (batch_size,)
-    # we sample from ix
-    x = torch.from_numpy(X[ix.numpy()].astype(np.int64)).contiguous()
-    y = torch.from_numpy(y[ix.numpy()].astype(np.int64)).contiguous()
-    
-    # get puzzle_identifiers from `puzzle_identifiers` and `puzzle_indicies`
-    # puzzle indicies are sorted manner with start and end points 
-    ix_np = ix.numpy()
-    searches = np.searchsorted(puzzle_indicies, ix_np, side='right') - 1
-    searches = np.clip(searches, 0, len(puzzle_identifiers) - 1)
-    puzzle_ids = torch.from_numpy(puzzle_identifiers[searches]).to(dtype=torch.int32)
+        
+    if split == 'train':
+        ix = torch.randint(len(trn_X), (batch_size,))
+        x = torch.from_numpy(trn_X[ix]).to(torch.long)
+        y = torch.from_numpy(trn_y[ix]).to(torch.long)
+        puzzle_ids = torch.from_numpy(trn_puzzle_indexes[ix]).to(torch.long)
+    else:
+        ix = torch.randint(len(tst_X), (batch_size,))
+        x = torch.from_numpy(tst_X[ix]).to(torch.long)
+        y = torch.from_numpy(tst_y[ix]).to(torch.long)
+        puzzle_ids = torch.from_numpy(tst_puzzle_indexes[ix]).to(torch.long)
     
     if device_type == 'cuda':
         # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
@@ -175,14 +184,12 @@ meta_vocab_size = 12
 #                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
 model_args = model_config.get('config', {})
 model_args['block_size'] = block_size
-model_args['vocab_size'] = None
+model_args['vocab_size'] = 12
 
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
-        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
     model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
