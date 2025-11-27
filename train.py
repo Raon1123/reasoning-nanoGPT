@@ -30,7 +30,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
-from utils.toolkit import load_yaml
+from utils.toolkit import load_yaml, load_json
 
 from models.scheduler import NanoGPTScheduler as CosineWarmupScheduler
 from utils.const import IGNORE_LABEL_ID
@@ -139,7 +139,7 @@ lengths = trn_puzzle_indicies[1:] - trn_puzzle_indicies[:-1]
 indices = np.arange(len(lengths))
 trn_puzzle_indexes = np.repeat(indices, lengths)
 
-trn_meta = load_yaml(os.path.join(trn_root, 'dataset.yaml'))
+trn_meta = load_json(os.path.join(trn_root, 'dataset.json'))
 meta_vocab_size = trn_meta.get('vocab_size', 12)
 ignore_label_id = trn_meta.get('ignore_label_id', IGNORE_LABEL_ID)
 
@@ -150,6 +150,10 @@ tst_puzzle_indicies = np.load(os.path.join(tst_root, 'all__puzzle_indices.npy'),
 lengths = tst_puzzle_indicies[1:] - tst_puzzle_indicies[:-1]
 indices = np.arange(len(lengths))
 tst_puzzle_indexes = np.repeat(indices, lengths)
+
+tst_meta = load_json(os.path.join(tst_root, 'dataset.json'))
+assert meta_vocab_size == tst_meta.get('vocab_size', 12)
+assert ignore_label_id == tst_meta.get('ignore_label_id', IGNORE_LABEL_ID)
 
 
 def get_batch(split):
