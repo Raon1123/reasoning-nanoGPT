@@ -271,7 +271,7 @@ def estimate_loss():
             # I should not understand why with ctx here causes some problem
             # min max of Y
             with torch.inference_mode():
-                logits, loss = model(X, puzzle_id, Y)
+                logits, loss = model(X, puzzle_id, Y, test_mode=True)
                 
                 # for calculate accuracy
                 mask = (Y != ignore_label_id)
