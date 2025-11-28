@@ -1,0 +1,56 @@
+device: cuda
+
+logging:
+  wandb_log: true
+  wandb_project: reasoning_nanoGPT
+  wandb_run_name: smol
+  output_dir: outputs/
+  eval_only: false
+  eval_interval: 100
+  log_interval: 1
+  eval_iters: 200
+  always_save_checkpoint: false
+  init_from: scratch  # options: scratch / resume 
+
+dataset:
+  type: arc_agi1
+  config:
+    seed: 42
+    data_root: data/arc_agi/processed_data
+  
+model:
+  type: nanoGPT
+  dtype: float16
+  compile: true
+  config:
+    n_layer: 2
+    n_head: 8
+    n_embd: 128
+    dropout: 0.0
+    bias: false
+    sparsity: 1.0
+
+training:
+  batch_size: 128
+  gradient_accumulation_steps: 40
+  block_size: 900
+  max_iters: 600000
+  decay_lr: true
+  optimizer:
+    type: adamw
+    config:
+      lr: 6.0e-4
+      betas: [0.9, 0.95]
+      weight_decay: 0.1
+    grad_clip: 1.0
+  scheduler:
+    type: compose
+    config:
+      schedulers:
+        - type: linear_warmup
+          config:
+            warmup_iters: 2000
+        - type: cosine_decay
+          config:
+            max_iters: 600000
+            min_lr: 6.0e-5

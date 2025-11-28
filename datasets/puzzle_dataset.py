@@ -1,0 +1,293 @@
+"""
+Define datasets for reasoning puzzles. e.g. Sudoku, ARC-AGI, etc.
+The source of these data parts from ARC-teams HRM Analysis repository:
+https://github.com/arcprize/hierarchical-reasoning-model-analysis
+"""
+import os
+import json
+from typing import (
+    List,
+    Optional,
+)
+
+import numpy as np
+import pydantic
+import torch
+from torch.utils.data import (
+    IterableDataset, Dataset, get_worker_info
+)
+
+from utils.const import IGNORE_LABEL_ID
+
+def _sample_batch(rng: np.random.Generator, group_order: np.ndarray, puzzle_indices: np.ndarray, group_indices: np.ndarray, start_index: int, global_batch_size: int):
+    # Pack examples into a full batch
+    batch = []
+    batch_puzzle_indices = []
+    current_size = 0
+
+    while (start_index < group_order.size) and (current_size < global_batch_size):
+        # Pick a group and a puzzle from that group
+        group_id = group_order[start_index]
+        puzzle_id = rng.integers(group_indices[group_id], group_indices[group_id + 1])
+        start_index += 1
+
+        # Get range of the puzzle
+        puzzle_start = puzzle_indices[puzzle_id]
+        puzzle_size = int(puzzle_indices[puzzle_id + 1] - puzzle_start)
+
+        append_size = min(puzzle_size, global_batch_size - current_size)
+
+        # Put into batch
+        batch_puzzle_indices.append(np.full(append_size, puzzle_id, dtype=np.int32))
+        batch.append(puzzle_start + np.random.choice(puzzle_size, append_size, replace=False))
+
+        current_size += append_size
+
+    return start_index, np.concatenate(batch), np.concatenate(batch_puzzle_indices)
+
+class PuzzleDatasetConfig(pydantic.BaseModel):
+    seed: int
+    dataset_path: str
+    global_batch_size: int
+    test_set_mode: bool
+
+    epochs_per_iter: int  # Batch X epochs in an iteration to reduce overhead.
+
+    rank: int
+    num_replicas: int
+    
+# Global list mapping each dihedral transform id to its inverse.
+# Index corresponds to the original tid, and the value is its inverse.
+DIHEDRAL_INVERSE = [0, 3, 2, 1, 4, 5, 6, 7]
+
+class PuzzleDatasetMetadata(pydantic.BaseModel):
+    pad_id: int
+    ignore_label_id: Optional[int]
+    blank_identifier_id: int
+    
+    vocab_size: int
+    seq_len: int
+    num_puzzle_identifiers: int
+    
+    total_groups: int
+    mean_puzzle_examples: float
+
+    sets: List[str]
+
+class PuzzleDataset(IterableDataset):
+    def __init__(self,
+                 config: PuzzleDatasetConfig,
+                 split: str = 'train') -> None:
+        """
+        Dataset for reasoning puzzles.
+        Args:
+            config (dict): Configuration dictionary.
+            split (str): Dataset split, 'train' or 'test'.
+        """
+        super().__init__()
+        
+        self.config = config
+        self.split = split
+        self.metadata = self._load_metadata()
+        
+        self._check_inputs() # Validate inputs.
+        self.local_batch_size = self.config.global_batch_size // self.config.num_replicas
+        
+        self._data = None
+        self._iters = 0
+        
+    def __iter__(self):
+        worker_info = get_worker_info()
+        assert worker_info is None or worker_info.num_workers == 1, \
+            "Multithreaded data loading is not currently supported."
+        
+        self._lazy_load_dataset()
+        
+        # Iterate using specified mode
+        if self.config.test_set_mode:
+            yield from self._iter_test()
+        else:
+            yield from self._iter_train()
+    
+    def _lazy_load_dataset(self):
+        if self._data is not None:
+            return
+
+        field_mmap_modes = {
+            "inputs": "r",
+            "labels": "r",
+
+            # Keep indices in memory
+            "puzzle_identifiers": None,
+            "puzzle_indices": None,
+            "group_indices": None
+        }
+
+        # Load data
+        self._data = {}
+        for set_name in self.metadata.sets:
+            # Load subset
+            self._data[set_name] = {
+                field_name: np.load(os.path.join(self.config.dataset_path, self.split, f"{set_name}__{field_name}.npy"), mmap_mode=mmap_mode)
+                for field_name, mmap_mode in field_mmap_modes.items()
+            }
+    
+    def _collate_batch(self, batch):
+        # Convert dtype
+        batch = {k: v.astype(np.int32) for k, v in batch.items()}
+
+        # Convert ignore label IDs
+        if self.metadata.ignore_label_id is not None:
+            batch["labels"][batch["labels"] == self.metadata.ignore_label_id] = IGNORE_LABEL_ID
+
+        # Pad
+        if batch["puzzle_identifiers"].size < self.local_batch_size:
+            pad_size = self.local_batch_size - batch["puzzle_identifiers"].size
+
+            pad_values = {
+                "inputs": self.metadata.pad_id,
+                "labels": IGNORE_LABEL_ID,
+
+                "puzzle_identifiers": self.metadata.blank_identifier_id
+            }
+            batch = {k: np.pad(v, ((0, pad_size), ) + ((0, 0), ) * (v.ndim - 1), constant_values=pad_values[k]) for k, v in batch.items()}
+
+        # To tensor
+        return {k: torch.from_numpy(v) for k, v in batch.items()}
+    
+    def _iter_test(self):
+        for set_name, dataset in self._data.items():  # type: ignore
+            total_examples = len(dataset["inputs"])
+
+            # Load examples one by one
+            start_index = 0
+            while start_index < total_examples:
+                # Compute indices
+                end_index = min(total_examples, start_index + self.config.global_batch_size)
+                
+                local_start = start_index + self.config.rank * self.local_batch_size
+                local_end   = min(start_index + (self.config.rank + 1) * self.local_batch_size, end_index)
+                
+                # Get batch of examples, and also puzzle IDs
+                puzzle_indices = []
+                puzzle_index = np.searchsorted(dataset["puzzle_indices"], local_start, side="right") - 1
+                for i in range(local_start, local_end):
+                    while puzzle_index + 1 < len(dataset["puzzle_indices"]) and i >= dataset["puzzle_indices"][puzzle_index + 1]:
+                        puzzle_index += 1
+
+                    puzzle_indices.append(puzzle_index)
+                
+                batch = self._collate_batch({
+                    "inputs": dataset["inputs"][local_start: local_end],
+                    "labels": dataset["labels"][local_start: local_end],
+                    "puzzle_identifiers": dataset["puzzle_identifiers"][puzzle_indices]
+                })
+
+                #yield set_name, batch, end_index - start_index
+                # set_name is for at test stage identifying different puzzles
+                yield batch
+                
+                # Advance to next batch
+                start_index += self.config.global_batch_size
+
+    def _iter_train(self):
+        for set_name, dataset in self._data.items():  # type: ignore
+            # Increase epoch count
+            self._iters += 1
+
+            # Randomly shuffle groups
+            rng = np.random.Generator(np.random.Philox(seed=self.config.seed + self._iters))
+
+            group_order = np.concatenate([rng.permutation(dataset["group_indices"].size - 1) for _i in range(self.config.epochs_per_iter)])
+            start_index = 0
+            
+            while start_index < group_order.size:
+                start_index, batch_indices, batch_puzzle_indices = _sample_batch(
+                    rng,
+                    group_order=group_order,
+                    puzzle_indices=dataset["puzzle_indices"],
+                    group_indices=dataset["group_indices"],
+                    start_index=start_index,
+                    global_batch_size=self.config.global_batch_size,
+                )
+
+                # Select current rank and collate
+                global_effective_batch_size = batch_puzzle_indices.size  # Global effective batch size, excluding pads
+
+                # Drop last batch
+                if global_effective_batch_size < self.config.global_batch_size:
+                    break
+
+                batch_indices        = batch_indices       [self.config.rank * self.local_batch_size: (self.config.rank + 1) * self.local_batch_size]
+                batch_puzzle_indices = batch_puzzle_indices[self.config.rank * self.local_batch_size: (self.config.rank + 1) * self.local_batch_size]
+                batch = self._collate_batch({
+                    "inputs": dataset["inputs"][batch_indices],
+                    "labels": dataset["labels"][batch_indices],
+                    "puzzle_identifiers": dataset["puzzle_identifiers"][batch_puzzle_indices]
+                })
+
+                #yield set_name, batch, global_effective_batch_size
+                # global effective batch size is for parallel training
+                yield batch
+    
+    def _load_metadata(self):
+        meta_path = os.path.join(self.config.dataset_path,
+                                 self.split,
+                                 "dataset.json")
+        with open(meta_path, 'r') as f:
+            return PuzzleDatasetMetadata(**json.load(f))
+        
+    def _check_inputs(self):
+        assert self.config.global_batch_size % self.config.num_replicas == 0, \
+            f"Global batch size {self.config.global_batch_size} must be multiples of nodes {self.config.num_replicas}."
+
+
+def dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
+    """8 dihedral symmetries by rotate, flip and mirror"""
+    
+    if tid == 0:
+        return arr  # identity
+    elif tid == 1:
+        return np.rot90(arr, k=1)
+    elif tid == 2:
+        return np.rot90(arr, k=2)
+    elif tid == 3:
+        return np.rot90(arr, k=3)
+    elif tid == 4:
+        return np.fliplr(arr)       # horizontal flip
+    elif tid == 5:
+        return np.flipud(arr)       # vertical flip
+    elif tid == 6:
+        return arr.T                # transpose (reflection along main diagonal)
+    elif tid == 7:
+        return np.fliplr(np.rot90(arr, k=1))  # anti-diagonal reflection
+    else:
+        return arr
+    
+    
+def inverse_dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
+    return dihedral_transform(arr, DIHEDRAL_INVERSE[tid])
+
+
+class NaiveDataset(Dataset):
+    def __init__(self, data_root: str):
+        super().__init__()
+
+        self.X = np.load(os.path.join(data_root, 'all_inputs.npy'), mmap_mode='r')
+        self.Y = np.load(os.path.join(data_root, 'all_labels.npy'), mmap_mode='r')
+        
+        puzzle_identifiers = np.load(os.path.join(data_root, 'all_puzzle_identifiers.npy'), mmap_mode='r')
+        puzzle_indices = np.load(os.path.join(data_root, 'all_puzzle_indices.npy'), mmap_mode='r')
+        
+        self.puzzle_ids = []
+        for i in range(len(puzzle_indices) - 1):
+            start = puzzle_indices[i]
+            end = puzzle_indices[i + 1]
+            self.puzzle_ids.extend([puzzle_identifiers[i]] * (end - start))
+        self.puzzle_ids = np.array(self.puzzle_ids, dtype=np.int32)
+
+    def __len__(self):
+        return len(self.puzzle_ids)
+
+    def __getitem__(self, idx):
+        return self.X[idx], self.Y[idx], self.puzzle_ids[idx]
