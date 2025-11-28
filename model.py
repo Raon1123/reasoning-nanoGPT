@@ -193,7 +193,8 @@ class GPT(nn.Module):
     def forward(self, 
                 idx: torch.Tensor,
                 puzzle_idx: Union[torch.Tensor, None] = None,
-                targets: Union[torch.Tensor, None] = None):
+                targets: Union[torch.Tensor, None] = None,
+                test_mode: bool = False) -> Union[torch.Tensor, Union[torch.Tensor, None]]:
         x = self._input_embeddings(idx, puzzle_idx)
         
         for block in self.transformer.h:
@@ -205,7 +206,7 @@ class GPT(nn.Module):
             logits = self.lm_head(x)
             # range of logits and targets is (B, T, C) and (B, T) respectively
             
-            if self.config.sparsity < 1.0:
+            if self.config.sparsity < 1.0 and not test_mode:
                 # randomly mask out some targets for sparse loss computation
                 _, T = targets.size()
                 mask_size = int(T * self.config.sparsity)
