@@ -193,7 +193,7 @@ best_val_loss = 1e9
 model_args = model_config.get('config', {})
 model_args['block_size'] = block_size
 model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 12
-model_args['ignore_label_id'] = ignore_label_id
+model_args['ignore_label_id'] = ignore_label_id if model_config.get('ignore_idx', False) else IGNORE_LABEL_ID
 
 if init_from == 'scratch':
     # init a new model from scratch
