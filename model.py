@@ -207,11 +207,13 @@ class GPT(nn.Module):
             
             if self.config.sparsity < 1.0:
                 # randomly mask out some targets for sparse loss computation
-                B, T = targets.size()
-                mask = (torch.rand(B, T, device=targets.device) < self.config.sparsity)
-                sparse_logits = logits.masked_select(mask.unsqueeze(-1)).view(-1, logits.size(-1))
-                sparse_targets = targets.masked_fill(~mask, self.config.ignore_label_id)
-                loss = F.cross_entropy(sparse_logits.to(torch.float32), sparse_targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
+                _, T = targets.size()
+                mask_size = int(T * self.config.sparsity)
+                rand_indices = torch.randperm(T, device=targets.device)[:mask_size]
+                sparse_targets = targets[:, rand_indices]
+                sparse_logits = logits[:, rand_indices, :]
+                
+                loss = F.cross_entropy(sparse_logits.to(torch.float32).view(-1, logits.size(-1)), sparse_targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
             else:
                 loss = F.cross_entropy(logits.to(torch.float32).view(-1, logits.size(-1)), targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
         else:
