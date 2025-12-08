@@ -164,11 +164,13 @@ def get_batch(split):
         ix = torch.randint(len(trn_X), (batch_size,))
         x = torch.from_numpy(trn_X[ix]).to(torch.long)
         y = torch.from_numpy(trn_y[ix]).to(torch.long)
+        y[y == ignore_label_id] = IGNORE_LABEL_ID
         puzzle_ids = torch.from_numpy(trn_puzzle_indexes[ix]).to(torch.long)
     else:
         ix = torch.randint(len(tst_X), (batch_size,))
         x = torch.from_numpy(tst_X[ix]).to(torch.long)
         y = torch.from_numpy(tst_y[ix]).to(torch.long)
+        y[y == ignore_label_id] = IGNORE_LABEL_ID
         puzzle_ids = torch.from_numpy(tst_puzzle_indexes[ix]).to(torch.long)
     
     if device_type == 'cuda':
@@ -274,7 +276,7 @@ def estimate_loss():
                 logits, loss = model(X, puzzle_id, Y, test_mode=True)
                 
                 # for calculate accuracy
-                mask = (Y != ignore_label_id)
+                mask = (Y != IGNORE_LABEL_ID)
                 preds = torch.argmax(logits, dim=-1)
                 
                 # correct per token (pixel)
