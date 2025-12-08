@@ -1,5 +1,6 @@
 import os
 
+import torch
 from torch.utils.tensorboard import SummaryWriter
 
 try:
@@ -49,4 +50,39 @@ class Logger:
         self.tb_writer.add_image(tag, img_tensor, step)
         if self.wandb_log:
             wandb.log({tag: wandb.Image(img_tensor)}, step=step)    
+            
+    def log_ckpt(self,
+                 model: torch.nn.Module,
+                 optimizer: torch.optim.Optimizer,
+                 model_args: dict,
+                 iter_num: int,
+                 best_val_loss: float,
+                 config: dict,) -> None:
         
+        ckpt_path = get_ckpt_path(config)
+        
+        checkpoint = {
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'model_args': model_args,
+            'iter_num': iter_num,
+            'best_val_loss': best_val_loss,
+            'config': config
+        }
+        torch.save(checkpoint, ckpt_path)
+        
+        
+def get_ckpt_path(config: dict) -> str:
+    ckpt_path = os.path.join(
+        config['logging'].get('output_dir', 'outs'),
+        config['logging'].get('run_name', 'default_run'),
+        'ckpt.pt'
+    )
+    return ckpt_path
+        
+        
+def load_ckpt(config: dict,
+              device: str) -> dict:
+    ckpt_path = get_ckpt_path(config)
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    return checkpoint

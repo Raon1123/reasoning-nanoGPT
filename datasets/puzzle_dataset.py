@@ -273,11 +273,15 @@ class NaiveDataset(Dataset):
     def __init__(self, data_root: str):
         super().__init__()
 
-        self.X = np.load(os.path.join(data_root, 'all_inputs.npy'), mmap_mode='r')
-        self.Y = np.load(os.path.join(data_root, 'all_labels.npy'), mmap_mode='r')
+        X = np.load(os.path.join(data_root, 'all__inputs.npy'), mmap_mode='r')
+        Y = np.load(os.path.join(data_root, 'all__labels.npy'), mmap_mode='r')
         
-        puzzle_identifiers = np.load(os.path.join(data_root, 'all_puzzle_identifiers.npy'), mmap_mode='r')
-        puzzle_indices = np.load(os.path.join(data_root, 'all_puzzle_indices.npy'), mmap_mode='r')
+        # make to pytorch tensor with copy of np load
+        self.X = torch.from_numpy(X.astype(np.int32))
+        self.Y = torch.from_numpy(Y.astype(np.int32))
+        
+        puzzle_identifiers = np.load(os.path.join(data_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
+        puzzle_indices = np.load(os.path.join(data_root, 'all__puzzle_indices.npy'), mmap_mode='r')
         
         self.puzzle_ids = []
         for i in range(len(puzzle_indices) - 1):
