@@ -3,7 +3,7 @@ device: cuda
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: smol_head
+  wandb_run_name: smol_scratch
   output_dir: outputs/
   eval_only: false
   eval_interval: 100
@@ -23,12 +23,11 @@ model:
   dtype: float16
   compile: true
   config:
-    n_layer: 4
+    n_layer: 2
     n_head: 4
-    n_embd: 512
+    n_embd: 128
     dropout: 0.0
     bias: false
-    sparsity: 1.0
 
 training:
   batch_size: 128
@@ -36,7 +35,7 @@ training:
   block_size: 900
   max_iters: 600000
   decay_lr: true
-  optimizer:
+  optimizer:/90
     type: adamw
     config:
       lr: 6.0e-4
