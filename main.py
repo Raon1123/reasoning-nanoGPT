@@ -10,6 +10,7 @@ from utils.toolkit import (
     compute_init, compute_cleanup,
     load_yaml
 )
+from utils.const import IGNORE_LABEL_ID
 
 def get_args():
     import argparse
@@ -49,6 +50,8 @@ def main(config: dict):
     eval_interval = config['training'].get('eval_interval', 1000)
     ckpt_interval = config['training'].get('ckpt_interval', 1000)
     
+    ignore_label_id = test_metadata.get('ignore_label_id', IGNORE_LABEL_ID)
+    
     optimizer = get_optimizer(config, model, device)
     scheduler = get_scheduler(config, optimizer)
     
@@ -64,6 +67,20 @@ def main(config: dict):
         except:
             train_iter = iter(train_loader)
             batch = next(train_iter)
+        
+        X, Y, puzzle_ids = batch
+        Y[Y == ignore_label_id] = IGNORE_LABEL_ID
+        
+        # apply pin memory and device, non_blocking
+        if device.type != 'cpu':
+            X = X.pin_memory().to(device, non_blocking=True)
+            Y = Y.pin_memory().to(device, non_blocking=True)
+            puzzle_ids = puzzle_ids.pin_memory().to(device, non_blocking=True)
+        else:
+            X = X.to(device)
+            Y = Y.to(device)
+            puzzle_ids = puzzle_ids.to(device)
+        batch = (X, puzzle_ids, Y)
         
         # evaluation here
         if iter_num % eval_interval == 0 and master_process:
