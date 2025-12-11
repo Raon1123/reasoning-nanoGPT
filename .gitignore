@@ -5,6 +5,7 @@ uv.lock
 runs/
 out/
 wandb/
+logs/
 
 # about testing
 .pytest_cache/
