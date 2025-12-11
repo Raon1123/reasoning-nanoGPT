@@ -3,11 +3,13 @@ Include model and training configuration utilities.
 """
 import os
 import inspect
-
-import torch
 from typing import Union
 
+import torch
+from adam_atan2 import AdamATan2
+
 import models.nanogpt as nanogpt
+from models.optimizer import CastedSparseEmbeddingSignSGD_Distributed, CombinedOptimizer
 from models.scheduler import NanoGPTScheduler
 from utils.logger import load_ckpt
 
@@ -61,6 +63,15 @@ def get_optimizer(config: dict,
         if use_fused:
             optim_config['fused'] = True
         optimizer = torch.optim.AdamW(model.parameters(), **optim_config)
+    elif optimizer_type == 'adamaten2':
+        puzzle_emb_optimizer = CastedSparseEmbeddingSignSGD_Distributed(
+            model.puzzle_emb.buffers(),
+            lr=0,
+            weight_decay=0.1,
+            world_size=torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
+        )
+        adam_optimizer = AdamATan2(model.parameters(), **optim_config)
+        optimizer = CombinedOptimizer(puzzle_emb_optimizer, adam_optimizer)
     elif optimizer_type == 'distributed':
         # TODO: implement distributed optimizer
         raise NotImplementedError("Distributed optimizer is not implemented yet.")
