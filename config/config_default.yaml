@@ -24,17 +24,18 @@ model:
   compile: true
   config:
     n_layer: 4
-    n_head: 4
+    n_head: 8
     n_embd: 512
     dropout: 0.0
     bias: false
     sparsity: 1.0
+    puzzle_emb_ndim: 512
 
 training:
   batch_size: 128
   gradient_accumulation_steps: 40
   block_size: 900
-  max_iters: 600000
+  max_iters: 100000
   decay_lr: true
   optimizer:
     type: adamw
@@ -47,10 +48,7 @@ training:
     type: compose
     config:
       schedulers:
-        - type: linear_warmup
-          config:
-            warmup_iters: 2000
-        - type: cosine_decay
-          config:
-            max_iters: 600000
-            min_lr: 6.0e-5
+        warmup_iters: 2000
+        lr_decay_iters: 10000
+        min_lr: 6.0e-5
+        learning_rate: 6.0e-4

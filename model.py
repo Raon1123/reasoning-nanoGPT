@@ -151,7 +151,7 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size+self.puzzle_emb_len, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -208,6 +208,10 @@ class GPT(nn.Module):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
+            if self.puzzle_emb_ndim > 0:
+                # remove puzzle embeddings from the output
+                logits = logits[:, self.puzzle_emb_len:, :]
+            # eliminate puzzle
             # range of logits and targets is (B, T, C) and (B, T) respectively
             
             if self.config.sparsity < 1.0 and not test_mode:
@@ -237,7 +241,7 @@ class GPT(nn.Module):
         b, t = idx.size()
         assert t <= self.config.block_size, \
             f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        pos = torch.arange(0, t+self.puzzle_emb_len, dtype=torch.long, device=device) # shape (t+1)
         
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)

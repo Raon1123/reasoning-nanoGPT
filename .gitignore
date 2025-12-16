@@ -10,6 +10,7 @@ logs/
 # about testing
 .pytest_cache/
 processed_data/
+wopermute/
 
 data/arc-aug-1000
 
