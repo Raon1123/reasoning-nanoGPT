@@ -92,16 +92,34 @@ def get_optimizer(config: dict,
 
 def get_scheduler(config: dict, 
                   optimizer: torch.optim.Optimizer):
-    scheduler_config = config['training']['scheduler']['config']
-    warmup_iters = scheduler_config.get('warmup_iters', 2000)
-    lr_decay_iters = scheduler_config.get('lr_decay_iters', 10000)
-    min_lr = scheduler_config.get('min_lr', 6e-5)
-    learning_rate = scheduler_config.get('learning_rate', 6e-4)
-    scheduler = NanoGPTScheduler(
-        optimizer,
-        warmup_iters=warmup_iters,
-        lr_decay_iters=lr_decay_iters,
-        min_lr=min_lr,
-        max_lr=learning_rate
-    )
+    scheduler_type = config['training']['scheduler'].get('type', 'compose').lower()
+    
+    if scheduler_type == 'compose':
+        scheduler_config = config['training']['scheduler']['config']
+        warmup_iters = scheduler_config.get('warmup_iters', 2000)
+        lr_decay_iters = scheduler_config.get('lr_decay_iters', 10000)
+        min_lr = scheduler_config.get('min_lr', 6e-5)
+        learning_rate = scheduler_config.get('learning_rate', 6e-4)
+        scheduler = NanoGPTScheduler(
+            optimizer,
+            warmup_iters=warmup_iters,
+            lr_decay_iters=lr_decay_iters,
+            min_lr=min_lr,
+            max_lr=learning_rate
+        )
+    elif scheduler_type == 'hrm':
+        scheduler_config = {
+            'base_lr': config['training'].get('learning_rate', 1e-4),
+            'num_warmup_steps': config['training'].get('warmup_iters', 2000),
+            'num_training_steps': config['training'].get('max_iters', 600000),
+            'min_ratio': config['training'].get('min_lr_ratio', 0.1),
+        }
+        from models.scheduler import CosineSchedulerWithWarmup
+        scheduler = CosineSchedulerWithWarmup(
+            optimizer,
+            **scheduler_config
+        )
+    else:
+        raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
+        
     return scheduler
