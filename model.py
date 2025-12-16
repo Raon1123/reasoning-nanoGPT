@@ -113,6 +113,7 @@ class Block(nn.Module):
 # FIXED: I modify 
 @dataclass
 class GPTConfig:
+    batch_size: int = 64
     block_size: int = 1024
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 8
@@ -140,14 +141,14 @@ class GPT(nn.Module):
             self.puzzle_emb = CastedSparseEmbedding(
                 num_embeddings=self.config.num_puzzle_identifiers,
                 embedding_dim=self.puzzle_emb_len,
-                batch_size=1,  # will be overridden in forward
+                batch_size=self.config.batch_size,  # will be overridden in forward
                 init_std=0,
                 cast_to=torch.float32
             )
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size + self.puzzle_emb_len, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
@@ -169,6 +170,7 @@ class GPT(nn.Module):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+        print(f"Ignore label ID: {self.config.ignore_label_id}")
 
     def get_num_params(self, non_embedding=True):
         """
@@ -204,6 +206,11 @@ class GPT(nn.Module):
         if targets is not None:
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
+            
+            if self.puzzle_emb_len > 0:
+                # remove puzzle embedding positions from logits and targets
+                logits = logits[:, self.puzzle_emb_len:, :]
+            
             # range of logits and targets is (B, T, C) and (B, T) respectively
             
             if self.config.sparsity < 1.0 and not test_mode:
@@ -214,9 +221,9 @@ class GPT(nn.Module):
                 sparse_targets = targets[:, rand_indices]
                 sparse_logits = logits[:, rand_indices, :]
                 
-                loss = F.cross_entropy(sparse_logits.to(torch.float32).view(-1, logits.size(-1)), sparse_targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
+                loss = F.cross_entropy(sparse_logits.to(torch.float32).contiguous().view(-1, logits.size(-1)), sparse_targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
             else:
-                loss = F.cross_entropy(logits.to(torch.float32).view(-1, logits.size(-1)), targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
+                loss = F.cross_entropy(logits.to(torch.float32).contiguous().view(-1, logits.size(-1)), targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
@@ -233,7 +240,7 @@ class GPT(nn.Module):
         b, t = idx.size()
         assert t <= self.config.block_size, \
             f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
-        pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
+        pos = torch.arange(0, t+self.puzzle_emb_len, dtype=torch.long, device=device) # shape (t)
         
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
@@ -417,7 +424,6 @@ class CastedSparseEmbedding(nn.Module):
             # Test mode, no gradient
             return self.weights[inputs].to(self.cast_to)
             
-        # Training mode, fill puzzle embedding from weights
         with torch.no_grad():
             self.local_weights.copy_(self.weights[inputs])
             self.local_ids.copy_(inputs)

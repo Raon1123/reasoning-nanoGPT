@@ -3,7 +3,7 @@ device: cuda
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: tiny_emb_wo_sparse
+  wandb_run_name: puzzle_emb
   output_dir: outputs/
   eval_only: false
   eval_interval: 100
@@ -30,12 +30,13 @@ model:
     dropout: 0.0
     bias: false
     sparsity: 1.0
+    puzzle_emb_ndim: 512
 
 training:
   batch_size: 128
   gradient_accumulation_steps: 40
   block_size: 900
-  max_iters: 600000
+  max_iters: 100000
   decay_lr: true
   optimizer:
     type: adamw

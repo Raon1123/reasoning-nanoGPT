@@ -133,6 +133,9 @@ tst_root = os.path.join(data_dir, 'test')
 
 trn_X = np.load(os.path.join(trn_root, 'all__inputs.npy'), mmap_mode='r')
 trn_y = np.load(os.path.join(trn_root, 'all__labels.npy'), mmap_mode='r')
+trn_X = np.asarray(trn_X, dtype=np.uint8)
+trn_y = np.asarray(trn_y, dtype=np.uint8)
+
 trn_puzzle_identifiers = np.load(os.path.join(trn_root, 'all__puzzle_identifiers.npy'), mmap_mode='r') # actual puzzle IDs
 trn_puzzle_indicies = np.load(os.path.join(trn_root, 'all__puzzle_indices.npy'), mmap_mode='r') # start/end indices for each puzzle in the dataset
 lengths = trn_puzzle_indicies[1:] - trn_puzzle_indicies[:-1]
@@ -145,6 +148,9 @@ ignore_label_id = trn_meta.get('ignore_label_id', IGNORE_LABEL_ID)
 
 tst_X = np.load(os.path.join(tst_root, 'all__inputs.npy'), mmap_mode='r')
 tst_y = np.load(os.path.join(tst_root, 'all__labels.npy'), mmap_mode='r')
+tst_X = np.asarray(tst_X, dtype=np.uint8)
+tst_y = np.asarray(tst_y, dtype=np.uint8)
+
 tst_puzzle_identifiers = np.load(os.path.join(tst_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
 tst_puzzle_indicies = np.load(os.path.join(tst_root, 'all__puzzle_indices.npy'), mmap_mode='r')
 lengths = tst_puzzle_indicies[1:] - tst_puzzle_indicies[:-1]
@@ -155,6 +161,10 @@ tst_meta = load_json(os.path.join(tst_root, 'dataset.json'))
 assert meta_vocab_size == tst_meta.get('vocab_size', 12)
 assert ignore_label_id == tst_meta.get('ignore_label_id', IGNORE_LABEL_ID)
 
+tot_identifiers = load_json(os.path.join(data_dir, 'identifiers.json'))
+num_puzzle_identifiers = len(tot_identifiers)
+print(f"vocab size from dataset meta: {meta_vocab_size}")
+print(f"number of puzzle identifiers: {num_puzzle_identifiers}")
 
 def get_batch(split):
     # We recreate np.memmap every batch to avoid a memory leak, as per
@@ -196,6 +206,8 @@ model_args = model_config.get('config', {})
 model_args['block_size'] = block_size
 model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 12
 model_args['ignore_label_id'] = ignore_label_id if model_config.get('ignore_idx', False) else IGNORE_LABEL_ID
+model_args['num_puzzle_identifiers'] = num_puzzle_identifiers
+model_args['batch_size'] = batch_size
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -235,7 +247,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer_config = training_config.get('optimizer', {}).get('config', {})
