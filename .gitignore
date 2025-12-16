@@ -5,10 +5,15 @@ uv.lock
 runs/
 out/
 wandb/
+logs/
+
+*.out
+*.err
 
 # about testing
 .pytest_cache/
 processed_data/
+wopermute/
 
 data/arc-aug-1000
 
