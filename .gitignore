@@ -7,6 +7,9 @@ out/
 wandb/
 logs/
 
+*.out
+*.err
+
 # about testing
 .pytest_cache/
 processed_data/

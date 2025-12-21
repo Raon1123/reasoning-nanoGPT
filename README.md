@@ -4,11 +4,8 @@
 ---
 We can find TODO from the comments `TODO` in the code. I should miss some points... Don't forget to check them.
 TODOS:
-- [ ]: Make a dataloader!!!! Don't use binfile for loading data. (FOR BETTER DATA LOADING)
-- [ ]: In `train.py`, it hardcode about the configs. We must manage our configs with yaml or etc. (DON'T HARDCODE THE CONFIG FOR REPRODUCIBILITY)
-- [ ]: Use `float16` instead of `bfloat16` for better compatibility with GPUs.
 - [ ]: Add more optimizer such as Adam_Aten2 etc.
-- []: Make batch with `X,y` manner `X=[input puzzles, puzzle_identifiers]`
+- [ ]: Make batch with `X,y` manner `X=[input puzzles, puzzle_identifiers]`
 
 ---
 

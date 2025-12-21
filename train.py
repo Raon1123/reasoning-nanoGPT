@@ -133,9 +133,8 @@ tst_root = os.path.join(data_dir, 'test')
 
 trn_X = np.load(os.path.join(trn_root, 'all__inputs.npy'), mmap_mode='r')
 trn_y = np.load(os.path.join(trn_root, 'all__labels.npy'), mmap_mode='r')
-# from mmap we fix these npy on memory, so we can index them directly
-trn_X = np.asarray(trn_X)
-trn_y = np.asarray(trn_y)
+trn_X = np.asarray(trn_X, dtype=np.uint8)
+trn_y = np.asarray(trn_y, dtype=np.uint8)
 
 trn_puzzle_identifiers = np.load(os.path.join(trn_root, 'all__puzzle_identifiers.npy'), mmap_mode='r') # actual puzzle IDs
 trn_puzzle_indicies = np.load(os.path.join(trn_root, 'all__puzzle_indices.npy'), mmap_mode='r') # start/end indices for each puzzle in the dataset
@@ -149,8 +148,9 @@ ignore_label_id = trn_meta.get('ignore_label_id', IGNORE_LABEL_ID)
 
 tst_X = np.load(os.path.join(tst_root, 'all__inputs.npy'), mmap_mode='r')
 tst_y = np.load(os.path.join(tst_root, 'all__labels.npy'), mmap_mode='r')
-tst_X = np.asarray(tst_X)
-tst_y = np.asarray(tst_y)
+tst_X = np.asarray(tst_X, dtype=np.uint8)
+tst_y = np.asarray(tst_y, dtype=np.uint8)
+
 tst_puzzle_identifiers = np.load(os.path.join(tst_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
 tst_puzzle_indicies = np.load(os.path.join(tst_root, 'all__puzzle_indices.npy'), mmap_mode='r')
 lengths = tst_puzzle_indicies[1:] - tst_puzzle_indicies[:-1]
@@ -174,11 +174,13 @@ def get_batch(split):
         ix = torch.randint(len(trn_X), (batch_size,))
         x = torch.from_numpy(trn_X[ix]).to(torch.long)
         y = torch.from_numpy(trn_y[ix]).to(torch.long)
+        y[y == ignore_label_id] = IGNORE_LABEL_ID
         puzzle_ids = torch.from_numpy(trn_puzzle_indexes[ix]).to(torch.long)
     else:
         ix = torch.randint(len(tst_X), (batch_size,))
         x = torch.from_numpy(tst_X[ix]).to(torch.long)
         y = torch.from_numpy(tst_y[ix]).to(torch.long)
+        y[y == ignore_label_id] = IGNORE_LABEL_ID
         puzzle_ids = torch.from_numpy(tst_puzzle_indexes[ix]).to(torch.long)
     
     if device_type == 'cuda':
@@ -205,6 +207,7 @@ model_args['block_size'] = block_size
 model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 12
 model_args['ignore_label_id'] = ignore_label_id if model_config.get('ignore_idx', False) else IGNORE_LABEL_ID
 model_args['num_puzzle_identifiers'] = num_puzzle_identifiers
+model_args['batch_size'] = batch_size
 
 if init_from == 'scratch':
     # init a new model from scratch
@@ -244,7 +247,7 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.GradScaler(enabled=(dtype == 'float16'))
 
 # optimizer
 optimizer_config = training_config.get('optimizer', {}).get('config', {})
@@ -285,7 +288,7 @@ def estimate_loss():
                 logits, loss = model(X, puzzle_id, Y, test_mode=True)
                 
                 # for calculate accuracy
-                mask = (Y != ignore_label_id)
+                mask = (Y != IGNORE_LABEL_ID)
                 preds = torch.argmax(logits, dim=-1)
                 
                 # correct per token (pixel)
