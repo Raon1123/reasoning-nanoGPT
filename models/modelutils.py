@@ -6,7 +6,7 @@ import inspect
 from typing import Union
 
 import torch
-from adam_atan2 import AdamATan2
+from adam_atan2_pytorch import AdamAtan2
 
 import models.nanogpt as nanogpt
 from models.optimizer import CastedSparseEmbeddingSignSGD_Distributed, CombinedOptimizer
@@ -15,7 +15,11 @@ from utils.logger import load_ckpt
 
 
 def get_model(config: dict,
-              device: str) -> torch.nn.Module:
+              device: str,
+              num_identifiers: int=0,
+              vocab_size: int=12,
+              batch_size: int=32,
+              ignore_label_id: int=-100) -> torch.nn.Module:
     model_config = config['model']
     
     init_from = config['logging'].get('init_from', 'scratch')
@@ -32,8 +36,14 @@ def get_model(config: dict,
                 state_dict[k[len(unwanted_prefix):]] = state_dict.pop(k)
     
     model_type = model_config.get('type', 'nanogpt').lower()
+    _model_config = model_config.get('config', {})
+    
     if model_type == 'nanogpt':
-        model_config = nanogpt.GPTConfig(**model_config['config'])
+        _model_config['num_identifiers'] = num_identifiers
+        _model_config['vocab_size'] = vocab_size
+        _model_config['batch_size'] = batch_size
+        _model_config['ignore_label_id'] = ignore_label_id
+        model_config = nanogpt.GPTConfig(**_model_config)
         model = nanogpt.GPT(model_config)
         if init_from == 'resume':
             model.load_state_dict(state_dict)
@@ -70,7 +80,7 @@ def get_optimizer(config: dict,
             weight_decay=0.1,
             world_size=torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1
         )
-        adam_optimizer = AdamATan2(model.parameters(), **optim_config)
+        adam_optimizer = AdamAtan2(model.parameters(), **optim_config)
         optimizer = CombinedOptimizer(puzzle_emb_optimizer, adam_optimizer)
     elif optimizer_type == 'distributed':
         # TODO: implement distributed optimizer

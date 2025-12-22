@@ -21,14 +21,16 @@ class Logger:
         project = logging_config.get('wandb_project', 'reasoning-nanogpt')
         run_name = logging_config.get('wandb_run_name', 'default_run')
         
-        log_dir = logging_config.get('logdir', 'logs')
+        self.run_dir = get_run_dir(config)
+        os.makedirs(self.run_dir, exist_ok=True)
         
         if self.wandb_log:
             wandb.init(project=project,
                        name=run_name,
-                       config=config)
+                       config=config,
+                       dir=self.run_dir)
         
-        self.tb_writer = SummaryWriter(log_dir=os.path.join(log_dir, run_name))
+        self.tb_writer = SummaryWriter(log_dir=self.run_dir)
         
     def log_metrics(self,
                     metrics: dict,
@@ -70,16 +72,24 @@ class Logger:
             'config': config
         }
         torch.save(checkpoint, ckpt_path)
-        
+
+
+def get_run_dir(config: dict) -> str:
+    logging_config = config['logging']
+    
+    run_name = logging_config.get('wandb_run_name', 'default_run')
+    log_dir = logging_config.get('logdir', 'logs')
+    run_dir = os.path.join(log_dir, run_name)
+    
+    return run_dir
+   
         
 def get_ckpt_path(config: dict) -> str:
     ckpt_path = os.path.join(
-        config['logging'].get('output_dir', 'outs'),
-        config['logging'].get('run_name', 'default_run'),
+        get_run_dir(config),
         'ckpt.pt'
     )
-    return ckpt_path
-        
+    return ckpt_path   
         
 def load_ckpt(config: dict,
               device: str) -> dict:

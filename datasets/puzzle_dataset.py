@@ -270,7 +270,10 @@ def inverse_dihedral_transform(arr: np.ndarray, tid: int) -> np.ndarray:
 
 
 class NaiveDataset(Dataset):
-    def __init__(self, data_root: str):
+    def __init__(self, 
+                 data_root: str,
+                 metadata: Optional[dict] = None,
+                 ignore_label_id: int = -100) -> None:
         super().__init__()
 
         X = np.load(os.path.join(data_root, 'all__inputs.npy'), mmap_mode='r')
@@ -279,6 +282,10 @@ class NaiveDataset(Dataset):
         # make to pytorch tensor with copy of np load
         self.X = torch.from_numpy(X.astype(np.int32))
         self.Y = torch.from_numpy(Y.astype(np.int32))
+        
+        if metadata is not None:
+            ignore_label = metadata.get('ignore_label_id', -100)
+            self.Y[self.Y == ignore_label] = ignore_label_id
         
         puzzle_identifiers = np.load(os.path.join(data_root, 'all__puzzle_identifiers.npy'), mmap_mode='r')
         puzzle_indices = np.load(os.path.join(data_root, 'all__puzzle_indices.npy'), mmap_mode='r')

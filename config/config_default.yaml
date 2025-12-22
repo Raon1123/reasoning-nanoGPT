@@ -3,7 +3,7 @@ device: cuda
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: smol_head
+  wandb_run_name: refactor
   output_dir: outputs/
   eval_only: false
   eval_interval: 100
@@ -33,8 +33,8 @@ model:
     puzzle_emb_ndim: 512
 
 training:
-  batch_size: 128
-  gradient_accumulation_steps: 40
+  batch_size: 32
+  gradient_accumulation_steps: 4
   block_size: 900
   max_iters: 100000
   decay_lr: true

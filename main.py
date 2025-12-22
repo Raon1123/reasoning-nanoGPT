@@ -1,16 +1,17 @@
-import os
 from contextlib import nullcontext
 
 import torch
 
-from datasets.datautils import get_dataloader
+from datasets.datautils import get_dataloader, get_identifiers
 from models.modelutils import get_model, get_optimizer, get_scheduler
+from utils.const import IGNORE_LABEL_ID
+from utils.epochs import eval_epoch
 from utils.logger import Logger
 from utils.toolkit import (
     compute_init, compute_cleanup,
     load_yaml
 )
-from utils.const import IGNORE_LABEL_ID
+
 
 def get_args():
     import argparse
@@ -38,19 +39,27 @@ def main(config: dict):
     best_val_loss = float('inf') if master_process else None
     eval_only = config['logging'].get('eval_only', False) if master_process else False
     
-    model = get_model(config, device.type)
-    if ddp:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[ddp_local_rank])
-        
     # data loader
     train_loader, train_metadata = get_dataloader(config, split='train')
     test_loader, test_metadata = get_dataloader(config, split='test')
+    num_identifiers = get_identifiers(config)
     
     max_iters = config['training'].get('max_iters', 100000)
     eval_interval = config['training'].get('eval_interval', 1000)
     ckpt_interval = config['training'].get('ckpt_interval', 1000)
     
-    ignore_label_id = test_metadata.get('ignore_label_id', IGNORE_LABEL_ID)
+    ignore_label_id = IGNORE_LABEL_ID
+    meta_vocab_size = test_metadata.get('vocab_size', 12)
+    batch_size = config['training'].get('batch_size', 32)
+    
+    model = get_model(config, 
+                      device.type,
+                      num_identifiers=num_identifiers,
+                      vocab_size=meta_vocab_size,
+                      batch_size=batch_size,
+                      ignore_label_id=ignore_label_id)
+    if ddp:
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[ddp_local_rank])
     
     optimizer = get_optimizer(config, model, device)
     scheduler = get_scheduler(config, optimizer)
@@ -84,12 +93,11 @@ def main(config: dict):
         
         # evaluation here
         if iter_num % eval_interval == 0 and master_process:
-            eval_metrics = eval_epoch(config,
+            eval_metrics = evaluation(config,
                                       model,
                                       train_loader,
                                       test_loader,
-                                      device,
-                                      ignore_padding=True)
+                                      device)
             eval_metrics['iter_num'] = iter_num
             logger.log_metrics(eval_metrics, step=iter_num)
             
@@ -142,65 +150,21 @@ def main(config: dict):
         torch.distributed.destroy_process_group()
                 
         
-    
-
-def eval_epoch(config: dict,
+def evaluation(config: dict,
                model: torch.nn.Module,
                trn_dataloader: torch.utils.data.DataLoader,
                tst_dataloader: torch.utils.data.DataLoader,
-               device: torch.device,
-               ignore_padding: bool) -> dict:
+               device: torch.device) -> dict:
     out = {}
     model.eval()
     for split in ['train', 'test']:
         dataloader = trn_dataloader if split == 'train' else tst_dataloader
 
-        eval_iters = config['training'].get('eval_iters', 200)
-        losses = torch.zeros(eval_iters)
-        valid_puzzle_counts = 0
-        pixel_accuracies = torch.zeros(eval_iters)
-        exact_corrects = 0
+        eval_ret = eval_epoch(config, model, dataloader, device)
         
-        for k in range(eval_iters):
-            try:
-                batch = next(eval_iter)
-            except:
-                eval_iter = iter(dataloader)
-                batch = next(eval_iter)
-                
-            X, Y, puzzle_ids = batch
-            # apply pin memory and device, non_blocking
-            if device.type != 'cpu':
-                X = X.pin_memory().to(device, non_blocking=True)
-                Y = Y.pin_memory().to(device, non_blocking=True)
-                puzzle_ids = puzzle_ids.pin_memory().to(device, non_blocking=True)
-            else:
-                X = X.to(device)
-                Y = Y.to(device)
-                puzzle_ids = puzzle_ids.to(device)
-                
-            with torch.inference_mode():
-                logits, loss = model(X, puzzle_ids, Y, test_mode=True)
-                
-                if ignore_padding:
-                    # if ignore padding, padding is 0 in Y
-                    mask = (Y != 0)
-                else:
-                    mask = torch.ones_like(Y, dtype=torch.bool)
-                
-                preds = torch.argmax(logits, dim=-1)
-                correct = (preds == Y) & mask
-                pixel_accuracy = correct.sum().item() / mask.sum().item()
-                exact_accuracy = correct.sum(-1) == mask.sum(-1)
-            
-            losses[k] = loss.item()
-            pixel_accuracies[k] = pixel_accuracy
-            exact_corrects += exact_accuracy.sum().item()
-            valid_puzzle_counts += Y.size(0)
-            
-        out[f'{split}/loss'] = losses.mean().item()
-        out[f'{split}/pixel_accuracy'] = pixel_accuracies.mean().item()
-        out[f'{split}/exact_accuracy'] = exact_corrects / valid_puzzle_counts
+        # itration with eval_ret
+        for key, value in eval_ret.items():
+            out[f"{split}/{key}"] = value
         
     model.train()
         
