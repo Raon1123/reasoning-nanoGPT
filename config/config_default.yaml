@@ -2,11 +2,11 @@ device: cuda
 
 logging:
   wandb_log: true
-  wandb_project: reasoning_nanoGPT
-  wandb_run_name: puzzle_emb
+  wandb_project: reasoning_nanoGPT2
+  wandb_run_name: puzzle_emb_deep8_smolbatch
   output_dir: outputs/
   eval_only: false
-  eval_interval: 100
+  eval_interval: 2000
   log_interval: 1
   eval_iters: 200
   always_save_checkpoint: true
@@ -24,7 +24,7 @@ model:
   compile: true
   ignore_idx: false
   config:
-    n_layer: 4
+    n_layer: 10
     n_head: 8
     n_embd: 512
     dropout: 0.0
@@ -33,8 +33,8 @@ model:
     puzzle_emb_ndim: 512
 
 training:
-  batch_size: 128
-  gradient_accumulation_steps: 40
+  batch_size: 32
+  gradient_accumulation_steps: 16
   block_size: 900
   max_iters: 100000
   decay_lr: true
