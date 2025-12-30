@@ -20,7 +20,10 @@ from torch.nn import functional as F
 
 from models.layers import (
     LayerNorm,
-    Block
+    Block,
+    CastedSparseEmbedding,
+    CastedEmbedding,
+    RotaryEmbedding
 )
 from utils.toolkit import trunc_normal_init_
 
@@ -28,7 +31,7 @@ from utils.toolkit import trunc_normal_init_
 # FIXED: I modify 
 @dataclass
 class GPTConfig:
-    block_size: int = 1024
+    block_size: int = 900
     vocab_size: int = 12 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_layer: int = 8
     n_head: int = 8
@@ -39,9 +42,13 @@ class GPTConfig:
     puzzle_emb_ndim: int = 0  # Added to support puzzle embeddings
     
     # for NLP
-    activation: str = 'relu'  # Activation function for MLP: 'relu', 'gelu', etc.
-    expansion: float = 4.0  # Expansion factor for MLP hidden dimension
+    activation: str = 'relu'  # Activation function for MLP: 'relu', 'gelu', 'swiglu' etc.
+    expansion: float = 4.0  # Expansion factor for MLP hidden dimension where swiglu is used
     normalize: str = 'layernorm'  # Normalization type: 'layernorm', 'rmsnorm', etc.
+    pos_encodings: str = 'learned'  # Positional embedding type: 'rotary', 'learned', etc.
+    
+    rms_norm_eps: float = 1.0e-5  # Epsilon for RMSNorm
+    rope_theta: float = 10000.0  # Rotary position embedding base theta
     
     num_identifiers: int = 0  # Added to support puzzle embeddings
     ignore_label_id: int = -100  # Added to support sparse loss
@@ -68,11 +75,34 @@ class GPT(nn.Module):
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
-            wpe = nn.Embedding(config.block_size + self.puzzle_emb_len, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
+        
+        # LM blocks
+        pos_encodings = config.pos_encodings.lower()
+        assert pos_encodings in ['rotary', 'learned'], \
+            f"Unknown pos_encodings {pos_encodings}"
+        
+        self.embed_scale = math.sqrt(config.n_embd)
+        if pos_encodings == 'learned':
+            
+            embed_init_std = 1.0 / self.embed_scale
+            self.emb_pos = CastedEmbedding(
+                num_embeddings=config.block_size + self.puzzle_emb_len,
+                embedding_dim=config.n_embd,
+                init_std=embed_init_std,
+                cast_to=torch.float32
+            )
+        elif pos_encodings == 'rotary':
+            self.emb_pos = None  # no learned positional embeddings needed
+            self.rotary_emb = RotaryEmbedding(
+                dim=config.n_embd // config.n_head,
+                max_position_embeddings=config.block_size + self.puzzle_emb_len,
+                base=config.rope_theta
+            )
+        
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
@@ -80,7 +110,6 @@ class GPT(nn.Module):
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
         
-
         # init all weights
         self.apply(self._init_weights)
         # apply special scaled init to the residual projections, per GPT-2 paper
@@ -99,8 +128,7 @@ class GPT(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            n_params -= self.transformer.wpe.weight.numel()
+
         return n_params
 
     def _init_weights(self, module):
@@ -116,10 +144,14 @@ class GPT(nn.Module):
                 puzzle_idx: Union[torch.Tensor, None] = None,
                 targets: Union[torch.Tensor, None] = None,
                 test_mode: bool = False) -> Union[torch.Tensor, Union[torch.Tensor, None]]:
+        sequence_info = dict(
+            cos_sin=self.rotary_emb() if hasattr(self, 'rotary_emb') else None
+        )
+        
         x = self._input_embeddings(idx, puzzle_idx)
         
         for block in self.transformer.h:
-            x = block(x)
+            x = block(x, cos_sin=sequence_info['cos_sin'])
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -176,8 +208,12 @@ class GPT(nn.Module):
                 dim=-2
             )
                 
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        
+        if self.config.pos_encodings == 'learned':
+            # scale by inverse root square 2 to maintain forward variance
+            tok_emb = 0.7071067811865475 * (tok_emb + self.emb_pos.embedding_weight.to(torch.float32))
+        
+        x = self.embed_scale * tok_emb
         
         return x
 
@@ -187,7 +223,6 @@ class GPT(nn.Module):
         # but want to use a smaller block size for some smaller, simpler model
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
         for block in self.transformer.h:
             if hasattr(block.attn, 'bias'):
                 block.attn.bias = block.attn.bias[:,:,:block_size,:block_size]
@@ -234,60 +269,5 @@ class GPT(nn.Module):
         flops_promised = 312e12 # A100 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = flops_achieved / flops_promised
         return mfu
+    
 
-    @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
-        """
-        Take a conditioning sequence of indices idx (LongTensor of shape (b,t)) and complete
-        the sequence max_new_tokens times, feeding the predictions back into the model each time.
-        Most likely you'll want to make sure to be in model.eval() mode of operation for this.
-        """
-        for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-            # forward the model to get the logits for the index in the sequence
-            logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
-            if top_k is not None:
-                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
-                logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
-            probs = F.softmax(logits, dim=-1)
-            # sample from the distribution
-            idx_next = torch.multinomial(probs, num_samples=1)
-            # append sampled index to the running sequence and continue
-            idx = torch.cat((idx, idx_next), dim=1)
-
-        return idx
-
-
-class CastedSparseEmbedding(nn.Module):
-    def __init__(self, num_embeddings: int, embedding_dim: int, batch_size: int, init_std: float, cast_to: torch.dtype):
-        super().__init__()
-        self.cast_to = cast_to
-
-        # Real Weights
-        # Truncated LeCun normal init
-        self.weights = nn.Buffer(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
-        )
-
-        # Local weights and IDs
-        # Local embeddings, with gradient, not persistent
-        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
-        # Local embedding IDs, not persistent
-        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        if not self.training:
-            # Test mode, no gradient
-            return self.weights[inputs].to(self.cast_to)
-            
-        # Training mode, fill puzzle embedding from weights
-        with torch.no_grad():
-            self.local_weights.copy_(self.weights[inputs])
-            self.local_ids.copy_(inputs)
-
-        return self.local_weights.to(self.cast_to)

@@ -28,16 +28,20 @@ def get_dataloader(config: dict,
                    split: str) -> tuple[torch.utils.data.DataLoader, dict]:
     dataset, metadata = get_dataset(config, split)
     
-    dataset_config = config['dataset']
-    batch_size = dataset_config.get('batch_size', 32)
-    shuffle = dataset_config.get('shuffle', True) if split == 'train' else False
-    num_workers = dataset_config.get('num_workers', 4)
+    dataloader_config = config['dataset']['config']
+    batch_size = config['training'].get('batch_size', 32)
+    shuffle = dataloader_config.get('shuffle', True) 
+    num_workers = dataloader_config.get('num_workers', 4)
+    pin_memory = dataloader_config.get('pin_memory', False)
+    
+    print(f"Creating {split} dataloader with batch size {batch_size}, "
+          f"shuffle={shuffle}, num_workers={num_workers}, pin_memory={pin_memory}")
     
     dataloader = torch.utils.data.DataLoader(dataset,
                                              batch_size=batch_size,
                                              shuffle=shuffle,
                                              num_workers=num_workers,
-                                             pin_memory=True)
+                                             pin_memory=pin_memory)
     
     return dataloader, metadata
 

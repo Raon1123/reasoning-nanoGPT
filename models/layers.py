@@ -1,5 +1,5 @@
 import math
-from typing import Tuple
+from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
@@ -10,6 +10,8 @@ try:
 except ImportError:
     # Fallback to FlashAttention 2
     from flash_attn import flash_attn_func  # type: ignore[import]
+
+CosSin = Tuple[torch.Tensor, torch.Tensor]
 
 class LayerNorm(nn.Module):
     """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
@@ -38,15 +40,8 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
 
-    def forward(self, x):
+    def forward(self, x, cos_sin: Optional[CosSin] = None):
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch and move head forward to be the batch dim
@@ -54,23 +49,21 @@ class CausalSelfAttention(nn.Module):
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        
+        # RoPE
+        if cos_sin is not None:
+            cos, sin = cos_sin
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
             # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
-        else:
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=False)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.c_proj(y))
         return y
+
 
 class MLP(nn.Module):
     def __init__(self, config):
@@ -106,21 +99,22 @@ class Block(nn.Module):
             self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
             self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         elif normalze_func == 'rmsnorm':
-            self.ln_1 = lambda x: rms_norm(x, variance_epsilon=1e-5)
-            self.ln_2 = lambda x: rms_norm(x, variance_epsilon=1e-5)
+            self.ln_1 = lambda x: rms_norm(x, variance_epsilon=config.rms_norm_eps)
+            self.ln_2 = lambda x: rms_norm(x, variance_epsilon=config.rms_norm_eps)
         else:
             raise ValueError(f"Unsupported normalization: {config.normalize}")
         
         self.attn = CausalSelfAttention(config)
-        self.mlp = MLP(config)
+        
+        if config.activation.lower() == 'swiglu':
+            self.mlp = SwiGLU(config.n_embd, expansion=config.expansion)
+        else:
+            self.mlp = MLP(config)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
+    def forward(self, x, cos_sin: Optional[CosSin] = None):
+        x = x + self.attn(self.ln_1(x), cos_sin=cos_sin)
         x = x + self.mlp(self.ln_2(x))
         return x
-
-
-CosSin = Tuple[torch.Tensor, torch.Tensor]
 
 
 def _find_multiple(a, b):
@@ -135,14 +129,17 @@ def rotate_half(x: torch.Tensor):
 
 
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor):
-    # q, k: [bs, seq_len, num_heads, head_dim]
+    # q, k: [bs, seq_len, num_heads, head_dim] expect
+    # q, k: [bs, num_heads, seq_len, head_dim] actually
     # cos, sin: [seq_len, head_dim]
     orig_dtype = q.dtype
     q = q.to(cos.dtype)
     k = k.to(cos.dtype)
 
-    q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
-    k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
+    #q_embed = (q * cos.unsqueeze(-2)) + (rotate_half(q) * sin.unsqueeze(-2))
+    #k_embed = (k * cos.unsqueeze(-2)) + (rotate_half(k) * sin.unsqueeze(-2))
+    q_embed = (q * cos.unsqueeze(-3)) + (rotate_half(q) * sin.unsqueeze(-3))
+    k_embed = (k * cos.unsqueeze(-3)) + (rotate_half(k) * sin.unsqueeze(-3))
 
     return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
 
@@ -219,7 +216,7 @@ class RotaryEmbedding(nn.Module):
         # RoPE
         inv_freq = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32, device=device) / dim))
         t = torch.arange(max_position_embeddings, dtype=torch.float32, device=device)
-        freqs = torch.outer(t, inv_freq)
+        freqs = torch.outer(t, inv_freq) # shape: 
 
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
@@ -228,6 +225,36 @@ class RotaryEmbedding(nn.Module):
 
     def forward(self):
         return self.cos_cached, self.sin_cached
+    
+    
+class CastedSparseEmbedding(nn.Module):
+    def __init__(self, num_embeddings: int, embedding_dim: int, batch_size: int, init_std: float, cast_to: torch.dtype):
+        super().__init__()
+        self.cast_to = cast_to
+
+        # Real Weights
+        # Truncated LeCun normal init
+        self.weights = nn.Buffer(
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
+        )
+
+        # Local weights and IDs
+        # Local embeddings, with gradient, not persistent
+        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
+        # Local embedding IDs, not persistent
+        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        if not self.training:
+            # Test mode, no gradient
+            return self.weights[inputs].to(self.cast_to)
+            
+        # Training mode, fill puzzle embedding from weights
+        with torch.no_grad():
+            self.local_weights.copy_(self.weights[inputs])
+            self.local_ids.copy_(inputs)
+
+        return self.local_weights.to(self.cast_to)
     
     
 class SwiGLU(nn.Module):

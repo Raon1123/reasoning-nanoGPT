@@ -1,5 +1,5 @@
 import torch
-
+import tqdm
 
 from utils.const import IGNORE_LABEL_ID
 
@@ -17,9 +17,21 @@ def eval_epoch(config: dict,
     correct_puzzles, correct_pixels = 0, 0
     losses = 0.0 # average of over all batches
     
+    # we subsample the dataloader for faster evaluation
+    sample_dataloader = torch.utils.data.DataLoader(dataloader.dataset,
+                                       batch_size=dataloader.batch_size,
+                                       shuffle=True,
+                                       num_workers=dataloader.num_workers,
+                                       pin_memory=dataloader.pin_memory)
     
     # iterate through the dataloader
-    for batch in dataloader:
+    test_iters = config['logging'].get('eval_iters', 1)
+    for _ in tqdm.tqdm(range(test_iters)):
+        try:
+            batch = next(pbar_iter)
+        except:
+            pbar_iter = iter(sample_dataloader)
+            batch = next(pbar_iter)
         X, Y, puzzle_ids = batch
         # apply pin memory and device, non_blocking
         if device.type != 'cpu':

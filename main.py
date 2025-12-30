@@ -27,7 +27,7 @@ def main(config: dict):
     ddp, ddp_rank, ddp_local_rank, ddp_world_size, device = compute_init(device_type=device_type)
     
     master_process = (not ddp) or (ddp and ddp_rank == 0)
-    autocast_ctx = torch.autocast(device_type=device_type, dtype=torch.float16) if device_type == "cuda" else nullcontext()
+    autocast_ctx = torch.autocast(device_type=device_type, dtype=torch.float32) if device_type == "cuda" else nullcontext()
     synchronize = torch.cuda.synchronize if device_type == "cuda" else lambda: None
     scaler = torch.GradScaler(device=device.type) 
     get_max_memory = torch.cuda.max_memory_allocated if device_type == "cuda" else lambda: 0
@@ -41,6 +41,8 @@ def main(config: dict):
     
     # data loader
     train_loader, train_metadata = get_dataloader(config, split='train')
+    
+    val_loader, _ = get_dataloader(config, split='train')
     test_loader, test_metadata = get_dataloader(config, split='test')
     num_identifiers = get_identifiers(config)
     
@@ -95,7 +97,7 @@ def main(config: dict):
         if iter_num % eval_interval == 0 and master_process:
             eval_metrics = evaluation(config,
                                       model,
-                                      train_loader,
+                                      val_loader,
                                       test_loader,
                                       device)
             eval_metrics['iter_num'] = iter_num
@@ -120,7 +122,7 @@ def main(config: dict):
             if ddp:
                 model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
             with autocast_ctx:
-                logits, loss = model(*batch, test_mode=False)
+                logits, loss = model(X, puzzle_ids, Y, test_mode=False)
                 loss = loss / gradient_accumulation_steps
             scaler.scale(loss).backward()
             
