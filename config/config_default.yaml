@@ -3,7 +3,7 @@ device: cuda
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: refactor
+  wandb_run_name: refactor_puzzle_deep16_smolbatch
   output_dir: outputs/
   eval_only: false
   eval_interval: 100
@@ -24,7 +24,7 @@ model:
   compile: true
   ignore_idx: false
   config:
-    n_layer: 4
+    n_layer: 16
     n_head: 8
     n_embd: 512
     dropout: 0.0
@@ -34,7 +34,7 @@ model:
 
 training:
   batch_size: 32
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 16
   block_size: 900
   max_iters: 100000
   decay_lr: true
@@ -50,6 +50,6 @@ training:
     config:
       schedulers:
         warmup_iters: 2000
-        lr_decay_iters: 10000
+        lr_decay_iters: 600000
         min_lr: 6.0e-5
         learning_rate: 6.0e-4

@@ -40,10 +40,15 @@ def main(config: dict):
     eval_only = config['logging'].get('eval_only', False) if master_process else False
     
     # data loader
-    train_loader, train_metadata = get_dataloader(config, split='train')
+    train_loader, train_metadata = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
     
-    val_loader, _ = get_dataloader(config, split='train')
-    test_loader, test_metadata = get_dataloader(config, split='test')
+    # test loader is needed for evaluation
+    # do we need test at ddp rank != 0? probably not
+    if not master_process:
+        test_loader = None
+    else:
+        val_loader, _ = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
+        test_loader, test_metadata = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
     num_identifiers = get_identifiers(config)
     
     max_iters = config['training'].get('max_iters', 100000)
@@ -70,14 +75,19 @@ def main(config: dict):
     if master_process:
         from tqdm import tqdm
         pbar = tqdm(pbar, initial=0, dynamic_ncols=True)
-        
+    
+    epoch = 0
+    
     for iter_num in pbar:
         model.train()
         try:
             batch = next(train_iter)
         except:
+            if ddp:
+                train_loader.sampler.set_epoch(epoch)
             train_iter = iter(train_loader)
             batch = next(train_iter)
+            epoch += 1
         
         X, Y, puzzle_ids = batch
         Y[Y == ignore_label_id] = IGNORE_LABEL_ID
@@ -95,6 +105,8 @@ def main(config: dict):
         
         # evaluation here
         if iter_num % eval_interval == 0 and master_process:
+            assert val_loader is not None and test_loader is not None
+            assert logger is not None
             eval_metrics = evaluation(config,
                                       model,
                                       val_loader,
