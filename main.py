@@ -47,7 +47,7 @@ def main(config: dict):
     num_identifiers = get_identifiers(config)
     
     max_iters = config['training'].get('max_iters', 100000)
-    eval_interval = config['training'].get('eval_interval', 1000)
+    eval_interval = config['logging'].get('eval_interval', 1000)
     ckpt_interval = config['training'].get('ckpt_interval', 1000)
     
     ignore_label_id = IGNORE_LABEL_ID
@@ -139,13 +139,12 @@ def main(config: dict):
         synchronize()
         
         if master_process:
-            if iter_num % 100 == 0:
-                mem = get_max_memory() / (1024 ** 3) if device_type == "cuda" else 0
+            if iter_num % eval_interval == 0:
                 current_lr = scheduler.get_last_lr()[0]
-                pbar.set_description(f"iter {iter_num}, loss {loss.item():.4f}, lr {current_lr:.2e}, mem {mem:.2f} GB")
+                pbar.set_description(f"iter {iter_num}, loss {loss.item():.4f}, lr {current_lr:.2e}")
                 logger.log_metrics({'train/loss': loss.item(),
                                     'train/lr': current_lr,
-                                    'train/mem': mem},
+                                    'train/iter': iter_num,},
                                    step=iter_num)
                 
     if ddp:

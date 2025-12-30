@@ -26,26 +26,37 @@ def eval_epoch(config: dict,
     
     # iterate through the dataloader
     test_iters = config['logging'].get('eval_iters', 1)
-    for _ in tqdm.tqdm(range(test_iters)):
+    for _ in range(test_iters):
         try:
             batch = next(pbar_iter)
         except:
             pbar_iter = iter(sample_dataloader)
             batch = next(pbar_iter)
         X, Y, puzzle_ids = batch
+        mask = (Y != IGNORE_LABEL_ID)
         # apply pin memory and device, non_blocking
+        
+        device_fn = None
+        detach_fn = None
         if device.type != 'cpu':
-            X = X.pin_memory().to(device, non_blocking=True)
-            Y = Y.pin_memory().to(device, non_blocking=True)
-            puzzle_ids = puzzle_ids.pin_memory().to(device, non_blocking=True)
+            device_fn = lambda t: t.pin_memory().to(device, non_blocking=True)
+            detach_fn = lambda t: t.detach().cpu()
         else:
-            X = X.to(device)
-            Y = Y.to(device)
-            puzzle_ids = puzzle_ids.to(device)
-            
+            device_fn = lambda t: t.to(device)
+            detach_fn = lambda t: t.detach().cpu()
+        
+        X = device_fn(X)
+        Y = device_fn(Y)
+        puzzle_ids = device_fn(puzzle_ids)
+        
         with torch.inference_mode():
-            mask = (Y != IGNORE_LABEL_ID)
             logits, loss = model(X, puzzle_ids, Y, test_mode=True)
+            
+            # detach and move to cpu for metric calculations
+            logits = detach_fn(logits)
+            loss = detach_fn(loss)
+            Y = detach_fn(Y)
+            
             preds = torch.argmax(logits, dim=-1)
             correct = (preds == Y) & mask
             correct_pixels += correct.sum().item()
@@ -56,7 +67,7 @@ def eval_epoch(config: dict,
             losses += loss.item() * Y.size(0)  # sum up batch loss
             
     out['loss'] = losses / total_puzzles
-    out['pixel_accuracy'] = correct_pixels / total_pixels
-    out['exact_accuracy'] = correct_puzzles / total_puzzles
+    out['accuracy'] = correct_pixels / total_pixels
+    out['sequence_accuracy'] = correct_puzzles / total_puzzles
     
     return out

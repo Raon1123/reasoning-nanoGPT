@@ -4,7 +4,7 @@ seed: 42
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: refactor
+  wandb_run_name: refactor_puzzle_deep16_smolbatch
   output_dir: outputs/
   eval_only: false
   eval_interval: 100
@@ -35,12 +35,13 @@ model:
     bias: false
     sparsity: 1.0
     puzzle_emb_ndim: 512
+    activation: gelu
 
 training:
   batch_size: 32
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 16
   block_size: 900
-  max_iters: 400000
+  max_iters: 600000
   decay_lr: true
   optimizer:
     type: adamw
@@ -53,7 +54,7 @@ training:
     type: compose
     config:
       schedulers:
-        warmup_iters: 7000
-        lr_decay_iters: 100000
-        min_lr: 5.0e-6
-        learning_rate: 1.0e-4
+        warmup_iters: 2000
+        lr_decay_iters: 600000
+        min_lr: 6.0e-6
+        learning_rate: 6.0e-4
