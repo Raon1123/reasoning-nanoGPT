@@ -132,7 +132,7 @@ def main(config: dict):
         # train here
         for micro_step in range(gradient_accumulation_steps):
             if ddp:
-                model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
+                model.require_backward_grads_sync = (micro_step == gradient_accumulation_steps - 1)
             with autocast_ctx:
                 logits, loss = model(X, puzzle_ids, Y, test_mode=False)
                 loss = loss / gradient_accumulation_steps
