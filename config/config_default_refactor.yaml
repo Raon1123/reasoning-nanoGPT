@@ -1,0 +1,59 @@
+device: cuda
+seed: 42
+
+logging:
+  wandb_log: true
+  wandb_project: reasoning_nanoGPT
+  wandb_run_name: refactor
+  output_dir: outputs/
+  eval_only: false
+  eval_interval: 100
+  log_interval: 1
+  eval_iters: 200
+  always_save_checkpoint: true
+  init_from: scratch  # options: scratch / resume 
+
+dataset:
+  type: arc_agi1
+  data_path: data/arc_agi/processed_data
+  config:
+    seed: 42
+    shuffle: true
+    num_workers: 0
+    pin_memory: true
+  
+model:
+  type: nanoGPT
+  dtype: float16
+  compile: true
+  ignore_idx: false
+  config:
+    n_layer: 16
+    n_head: 8
+    n_embd: 512
+    dropout: 0.0
+    bias: false
+    sparsity: 1.0
+    puzzle_emb_ndim: 512
+
+training:
+  batch_size: 32
+  gradient_accumulation_steps: 4
+  block_size: 900
+  max_iters: 400000
+  decay_lr: true
+  optimizer:
+    type: adamw
+    config:
+      lr: 6.0e-4
+      betas: [0.9, 0.95]
+      weight_decay: 0.1
+    grad_clip: 1.0
+  scheduler:
+    type: compose
+    config:
+      schedulers:
+        warmup_iters: 7000
+        lr_decay_iters: 100000
+        min_lr: 5.0e-6
+        learning_rate: 1.0e-4
