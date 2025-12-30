@@ -25,7 +25,9 @@ def get_dataset(config: dict,
 
 
 def get_dataloader(config: dict,
-                   split: str) -> tuple[torch.utils.data.DataLoader, dict]:
+                   split: str,
+                   world_size: int=1,
+                   ddp_local_rank: int=-1) -> tuple[torch.utils.data.DataLoader, dict]:
     dataset, metadata = get_dataset(config, split)
     
     dataloader_config = config['dataset']['config']
@@ -37,11 +39,24 @@ def get_dataloader(config: dict,
     print(f"Creating {split} dataloader with batch size {batch_size}, "
           f"shuffle={shuffle}, num_workers={num_workers}, pin_memory={pin_memory}")
     
-    dataloader = torch.utils.data.DataLoader(dataset,
-                                             batch_size=batch_size,
-                                             shuffle=shuffle,
-                                             num_workers=num_workers,
-                                             pin_memory=pin_memory)
+    if ddp_local_rank >= 0:
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=world_size,
+            rank=ddp_local_rank,
+            shuffle=shuffle
+        )
+        dataloader = torch.utils.data.DataLoader(dataset,
+                                                 batch_size=batch_size,
+                                                 sampler=sampler,
+                                                 num_workers=num_workers,
+                                                 pin_memory=pin_memory)
+    else:
+        dataloader = torch.utils.data.DataLoader(dataset,
+                                                 batch_size=batch_size,
+                                                 shuffle=shuffle,
+                                                 num_workers=num_workers,
+                                                 pin_memory=pin_memory)
     
     return dataloader, metadata
 

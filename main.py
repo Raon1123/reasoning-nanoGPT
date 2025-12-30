@@ -48,7 +48,7 @@ def main(config: dict):
         test_loader = None
     else:
         val_loader, _ = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
-        test_loader, test_metadata = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
+        test_loader, _ = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
     num_identifiers = get_identifiers(config)
     
     max_iters = config['training'].get('max_iters', 100000)
@@ -56,7 +56,7 @@ def main(config: dict):
     ckpt_interval = config['training'].get('ckpt_interval', 1000)
     
     ignore_label_id = IGNORE_LABEL_ID
-    meta_vocab_size = test_metadata.get('vocab_size', 12)
+    meta_vocab_size = train_metadata.get('vocab_size', 12)
     batch_size = config['training'].get('batch_size', 32)
     
     model = get_model(config, 
