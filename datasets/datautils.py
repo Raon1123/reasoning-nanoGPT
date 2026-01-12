@@ -27,11 +27,12 @@ def get_dataset(config: dict,
 def get_dataloader(config: dict,
                    split: str,
                    world_size: int=1,
-                   ddp_local_rank: int=-1) -> tuple[torch.utils.data.DataLoader, dict]:
+                   ddp_local_rank: int=-1,
+                   batch_size: int=-1) -> tuple[torch.utils.data.DataLoader, dict]:
     dataset, metadata = get_dataset(config, split)
     
     dataloader_config = config['dataset']['config']
-    batch_size = config['training'].get('batch_size', 32)
+    batch_size = batch_size if batch_size > 0 else dataloader_config.get('batch_size', 32)
     shuffle = dataloader_config.get('shuffle', True) 
     num_workers = dataloader_config.get('num_workers', 4)
     pin_memory = dataloader_config.get('pin_memory', False)

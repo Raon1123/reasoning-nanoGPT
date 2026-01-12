@@ -47,8 +47,11 @@ def main(config: dict):
     if not master_process:
         test_loader = None
     else:
-        val_loader, _ = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
-        test_loader, _ = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
+        test_batch_size = config['training'].get('test_batch_size', 32)
+        val_loader, _ = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size,
+                                       batch_size=test_batch_size)
+        test_loader, _ = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size,
+                                        batch_size=test_batch_size)
     num_identifiers = get_identifiers(config)
     
     max_iters = config['training'].get('max_iters', 100000)
