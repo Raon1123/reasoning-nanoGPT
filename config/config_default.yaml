@@ -2,11 +2,16 @@ device: cuda
 
 logging:
   wandb_log: true
+<<<<<<< HEAD
   wandb_project: reasoning_nanoGPT
   wandb_run_name: refactor_puzzle_deep16_smolbatch
+=======
+  wandb_project: reasoning_nanoGPT2
+  wandb_run_name: puzzle_emb_deep8_smolbatch
+>>>>>>> 95755cb9c078bfc985285ee522a5f2405db8bb4a
   output_dir: outputs/
   eval_only: false
-  eval_interval: 100
+  eval_interval: 2000
   log_interval: 1
   eval_iters: 200
   always_save_checkpoint: true
@@ -24,7 +29,11 @@ model:
   compile: true
   ignore_idx: false
   config:
+<<<<<<< HEAD
     n_layer: 16
+=======
+    n_layer: 10
+>>>>>>> 95755cb9c078bfc985285ee522a5f2405db8bb4a
     n_head: 8
     n_embd: 512
     dropout: 0.0

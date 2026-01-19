@@ -56,6 +56,7 @@ training_config = config.get('training', {})
 
 # I/O
 out_dir = logging_config.get('output_dir', './out')
+out_dir = os.path.join(out_dir, logging_config.get('wandb_run_name', 'default_run'))
 eval_interval = logging_config.get('eval_interval', 2000)
 log_interval = logging_config.get('log_interval', 1)
 eval_iters = logging_config.get('eval_iters', 200)
@@ -177,7 +178,7 @@ def get_batch(split):
         y[y == ignore_label_id] = IGNORE_LABEL_ID
         puzzle_ids = torch.from_numpy(trn_puzzle_indexes[ix]).to(torch.long)
     else:
-        ix = torch.randint(len(tst_X), (batch_size,))
+        ix = torch.randint(len(tst_X), (batch_size*2,))
         x = torch.from_numpy(tst_X[ix]).to(torch.long)
         y = torch.from_numpy(tst_y[ix]).to(torch.long)
         y[y == ignore_label_id] = IGNORE_LABEL_ID
@@ -370,8 +371,8 @@ for epoch in tqdm_range:
                 }
                 print(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
-    if iter_num == 0 and eval_only:
-        break
+    #if iter_num == 0 and eval_only:
+    #    break
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
