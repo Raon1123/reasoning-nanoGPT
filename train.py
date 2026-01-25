@@ -178,7 +178,7 @@ def get_batch(split):
         y[y == ignore_label_id] = IGNORE_LABEL_ID
         puzzle_ids = torch.from_numpy(trn_puzzle_indexes[ix]).to(torch.long)
     else:
-        ix = torch.randint(len(tst_X), (batch_size*2,))
+        ix = torch.randint(len(tst_X), (32,))
         x = torch.from_numpy(tst_X[ix]).to(torch.long)
         y = torch.from_numpy(tst_y[ix]).to(torch.long)
         y[y == ignore_label_id] = IGNORE_LABEL_ID
@@ -191,7 +191,7 @@ def get_batch(split):
     else:
         x, y = x.to(device), y.to(device)
         puzzle_ids = puzzle_ids.to(device)
-    return x, y, puzzle_ids
+    return x, y, puzzle_ids, ix
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
@@ -282,7 +282,7 @@ def estimate_loss():
         exact_corrects = 0
         
         for k in range(eval_iters):
-            X, Y, puzzle_id = get_batch(split)
+            X, Y, puzzle_id, ix = get_batch(split)
             # I should not understand why with ctx here causes some problem
             # min max of Y
             with torch.inference_mode():
@@ -328,7 +328,7 @@ if wandb_log and master_process:
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
 # training loop
-X, Y, puzzle_id = get_batch('train') # fetch the very first batch
+X, Y, puzzle_id, ix = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
@@ -348,6 +348,28 @@ for epoch in tqdm_range:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: " + ", ".join([f"{k} {v:.4f}" for k,v in losses.items()]+[f"lr {lr:.6f}"]))
+        
+        # if losses are nan, report the error and stop training
+        if np.isnan(losses['train/loss']) or np.isnan(losses['test/loss']):
+            print("NaN detected in losses, exiting...")
+            # save checkpoint before exit
+            checkpoint = {
+                'model': raw_model.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'model_args': model_args,
+                'iter_num': iter_num,
+                'best_val_loss': best_val_loss,
+                'config': config,
+                #'scheduler': scheduler.state_dict() if decay_lr else None,
+            }
+            torch.save(checkpoint, os.path.join(out_dir, 'ckpt_nan.pt'))
+            # save the training and test indexes that produced NaN for further investigation
+            np.save(os.path.join(out_dir, 'trn_indexes_nan.npy'), ix.cpu().numpy())
+            np.save(os.path.join(out_dir, 'tst_indexes_nan.npy'), ix.cpu().numpy())
+            
+            #
+            break
+        
         if wandb_log:
             # append losses
             wandb_log = {
@@ -387,7 +409,7 @@ for epoch in tqdm_range:
             logits, loss = model(X, puzzle_id, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
-        X, Y, puzzle_id = get_batch('train')
+        X, Y, puzzle_id, ix = get_batch('train')
         # backward pass, with gradient scaling if training in fp16
         scaler.scale(loss).backward()
     # clip the gradient
