@@ -4,7 +4,7 @@ seed: 42
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: refactor_puzzle_deep24_tiny
+  wandb_run_name: refactor_puzzle_deep64_tiny
   output_dir: outputs/
   eval_only: false
   eval_interval: 1000
@@ -24,11 +24,11 @@ dataset:
   
 model:
   type: nanoGPT
-  dtype: float16
+  dtype: float32
   compile: true
   ignore_idx: false
   config:
-    n_layer: 24
+    n_layer: 64
     n_head: 8
     n_embd: 128
     dropout: 0.0
@@ -40,7 +40,7 @@ model:
 training:
   test_batch_size: 32
   batch_size: 8
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 4
   block_size: 900
   max_iters: 1000000
   decay_lr: true
@@ -54,8 +54,7 @@ training:
   scheduler:
     type: compose
     config:
-      schedulers:
-        warmup_iters: 2000
-        lr_decay_iters: 600000
-        min_lr: 6.0e-6
-        learning_rate: 6.0e-4
+      warmup_iters: 2000
+      lr_decay_iters: 600000
+      min_lr: 6.0e-6
+      learning_rate: 6.0e-4
