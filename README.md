@@ -6,6 +6,7 @@ We can find TODO from the comments `TODO` in the code. I should miss some points
 TODOS:
 - [ ]: Add more optimizer such as Adam_Aten2 etc.
 - [ ]: Make batch with `X,y` manner `X=[input puzzles, puzzle_identifiers]`
+- [ ]: make sure evaluation on all test dataset rather than one batch.
 
 ---
 

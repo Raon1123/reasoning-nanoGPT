@@ -2,19 +2,14 @@ device: cuda
 
 logging:
   wandb_log: true
-<<<<<<< HEAD
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: refactor_puzzle_deep16_smolbatch
-=======
-  wandb_project: reasoning_nanoGPT2
-  wandb_run_name: puzzle_emb_deep8_smolbatch
->>>>>>> 95755cb9c078bfc985285ee522a5f2405db8bb4a
+  wandb_run_name: smol_head
   output_dir: outputs/
   eval_only: false
-  eval_interval: 2000
+  eval_interval: 100
   log_interval: 1
   eval_iters: 200
-  always_save_checkpoint: true
+  always_save_checkpoint: false
   init_from: scratch  # options: scratch / resume 
 
 dataset:
@@ -27,30 +22,27 @@ model:
   type: nanoGPT
   dtype: float16
   compile: true
-  ignore_idx: false
   config:
-<<<<<<< HEAD
-    n_layer: 16
-=======
-    n_layer: 10
->>>>>>> 95755cb9c078bfc985285ee522a5f2405db8bb4a
-    n_head: 8
+    n_layer: 4
+    n_head: 4
     n_embd: 512
     dropout: 0.0
     bias: false
+    activation: gelu
+    expansion: 4.0
+    normalize: layernorm
     sparsity: 1.0
-    puzzle_emb_ndim: 512
 
 training:
-  batch_size: 32
-  gradient_accumulation_steps: 16
+  batch_size: 128
+  gradient_accumulation_steps: 40
   block_size: 900
-  max_iters: 100000
+  max_iters: 600000
   decay_lr: true
   optimizer:
-    type: adamw
+    type: adamaten2
     config:
-      lr: 6.0e-4
+      lr: 1.0e-4
       betas: [0.9, 0.95]
       weight_decay: 0.1
     grad_clip: 1.0
@@ -58,7 +50,10 @@ training:
     type: compose
     config:
       schedulers:
-        warmup_iters: 2000
-        lr_decay_iters: 600000
-        min_lr: 6.0e-5
-        learning_rate: 6.0e-4
+        - type: linear_warmup
+          config:
+            warmup_iters: 2000
+        - type: cosine_decay
+          config:
+            max_iters: 600000
+            min_lr: 6.0e-5

@@ -1,17 +1,13 @@
 device: cuda
+seed: 42
 
 logging:
   wandb_log: true
-<<<<<<< HEAD
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: refactor_puzzle_deep16_smolbatch
-=======
-  wandb_project: reasoning_nanoGPT2
-  wandb_run_name: puzzle_emb_deep8_smolbatch
->>>>>>> 95755cb9c078bfc985285ee522a5f2405db8bb4a
+  wandb_run_name: refactor_puzzle_deep64_tiny
   output_dir: outputs/
   eval_only: false
-  eval_interval: 2000
+  eval_interval: 1000
   log_interval: 1
   eval_iters: 200
   always_save_checkpoint: true
@@ -19,33 +15,34 @@ logging:
 
 dataset:
   type: arc_agi1
+  data_path: data/arc_agi/processed_data
   config:
     seed: 42
-    data_root: data/arc_agi/processed_data
+    shuffle: true
+    num_workers: 0
+    pin_memory: true
   
 model:
   type: nanoGPT
-  dtype: float16
+  dtype: float32
   compile: true
   ignore_idx: false
   config:
-<<<<<<< HEAD
-    n_layer: 16
-=======
-    n_layer: 10
->>>>>>> 95755cb9c078bfc985285ee522a5f2405db8bb4a
+    n_layer: 64
     n_head: 8
-    n_embd: 512
+    n_embd: 128
     dropout: 0.0
     bias: false
     sparsity: 1.0
-    puzzle_emb_ndim: 512
+    puzzle_emb_ndim: 128
+    activation: gelu
 
 training:
-  batch_size: 32
-  gradient_accumulation_steps: 16
+  test_batch_size: 32
+  batch_size: 8
+  gradient_accumulation_steps: 4
   block_size: 900
-  max_iters: 100000
+  max_iters: 1000000
   decay_lr: true
   optimizer:
     type: adamw
@@ -57,8 +54,7 @@ training:
   scheduler:
     type: compose
     config:
-      schedulers:
-        warmup_iters: 2000
-        lr_decay_iters: 600000
-        min_lr: 6.0e-5
-        learning_rate: 6.0e-4
+      warmup_iters: 2000
+      lr_decay_iters: 600000
+      min_lr: 6.0e-6
+      learning_rate: 6.0e-4

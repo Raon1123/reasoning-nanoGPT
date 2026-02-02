@@ -124,6 +124,10 @@ class GPTConfig:
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     puzzle_emb_ndim: int = 0  # Added to support puzzle embeddings
     
+    activation: str = 'gelu'  # Added to support different activations
+    expansion: float = 4.0  # Added to support different MLP expansion ratios
+    normalize: str = 'layernorm'  # Added to support different normalization layers
+    
     num_puzzle_identifiers: int = 0  # Added to support puzzle embeddings
     ignore_label_id: int = -100  # Added to support sparse loss
 
@@ -159,7 +163,6 @@ class GPT(nn.Module):
         # This behavior is deprecated and will be an error in future versions"
         # not 100% sure what this is, so far seems to be harmless. TODO investigate
         self.transformer.wte.weight = self.lm_head.weight # https://paperswithcode.com/method/weight-tying
-        
 
         # init all weights
         self.apply(self._init_weights)

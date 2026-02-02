@@ -28,6 +28,7 @@ class DataProcessConfig(BaseModel):
 
     seed: int = 42
     num_aug: int = 1000
+    permute_colors: bool = True
     
     
 ARCMaxGridSize = 30
@@ -102,10 +103,14 @@ def puzzle_hash(puzzle: dict):
     return hashlib.sha256("|".join(hashes).encode()).hexdigest()
 
 
-def aug(name: str):
+def aug(name: str,
+        permute_colors: bool = True):
     # Augment plan
     trans_id = np.random.randint(0, 8)
-    mapping = np.concatenate([np.arange(0, 1, dtype=np.uint8), np.random.permutation(np.arange(1, 10, dtype=np.uint8))])  # Permute colors, Excluding "0" (black)
+    if not permute_colors:
+        mapping = np.arange(12, dtype=np.uint8)
+    else:
+        mapping = np.concatenate([np.arange(0, 1, dtype=np.uint8), np.random.permutation(np.arange(1, 10, dtype=np.uint8))])  # Permute colors, Excluding "0" (black)
     
     name_with_aug_repr = f"{name}{PuzzleIdSeparator}t{trans_id}{PuzzleIdSeparator}{''.join(str(x) for x in mapping)}"
 
@@ -130,7 +135,10 @@ def inverse_aug(name: str):
     return name.split(PuzzleIdSeparator)[0], _map_grid
 
 
-def convert_single_arc_puzzle(results: dict, name: str, puzzle: dict, aug_count: int, dest_mapping: Dict[str, Tuple[str, str]]):
+def convert_single_arc_puzzle(results: dict, 
+                              name: str, 
+                              puzzle: dict, 
+                              aug_count: int, dest_mapping: Dict[str, Tuple[str, str]], permute_colors: bool = True) -> None:
     # Convert
     dests = set(dest_mapping.values())
     converted = {dest: ARCPuzzle(name, []) for dest in dests}
@@ -146,7 +154,7 @@ def convert_single_arc_puzzle(results: dict, name: str, puzzle: dict, aug_count:
         hashes = {puzzle_hash(converted)}
 
         for _trial in range(ARCAugmentRetriesFactor * aug_count):
-            aug_name, _map_grid = aug(name)
+            aug_name, _map_grid = aug(name, permute_colors=permute_colors)
 
             # Check duplicate
             augmented = {dest: ARCPuzzle(aug_name, [(_map_grid(input), _map_grid(label)) for (input, label) in puzzle.examples]) for dest, puzzle in converted.items()}
@@ -221,7 +229,10 @@ def load_puzzles_arcagi(config: DataProcessConfig):
             if test_examples_dest[0] == "test":
                 test_puzzles[name] = puzzle
                 
-            convert_single_arc_puzzle(results, name, puzzle, config.num_aug, {"train": train_examples_dest, "test": test_examples_dest})
+            convert_single_arc_puzzle(results, 
+                                      name, puzzle, config.num_aug, 
+                                      {"train": train_examples_dest, "test": test_examples_dest},
+                                      permute_colors=config.permute_colors)
             total_puzzles += 1
 
     print (f"Total puzzles: {total_puzzles}")
