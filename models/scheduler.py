@@ -66,3 +66,20 @@ class CosineSchedulerWithWarmup(LRScheduler):
 
         progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
         return base_lr * (min_ratio + max(0.0, (1 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))))
+    
+    
+class CombinedScheduler(LRScheduler):
+    def __init__(self, schedulers, last_epoch=-1):
+        self.schedulers = schedulers
+        super().__init__(schedulers[0].optimizer, last_epoch)
+
+    def get_lr(self):
+        lrs = []
+        for scheduler in self.schedulers:
+            lrs.extend(scheduler.get_lr())
+        return lrs
+
+    def step(self, epoch=None):
+        for scheduler in self.schedulers:
+            scheduler.step(epoch)
+        self._last_epoch += 1
