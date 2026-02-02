@@ -31,7 +31,7 @@ def main(config: dict):
     synchronize = torch.cuda.synchronize if device_type == "cuda" else lambda: None
     scaler = torch.GradScaler(device=device.type) 
     get_max_memory = torch.cuda.max_memory_allocated if device_type == "cuda" else lambda: 0
-    gradient_accumulation_steps = config['training'].get('gradient_accumulation_steps', 5 * 8)
+    gradient_accumulation_steps = config['training'].get('gradient_accumulation_steps', 1 * 8)
     
     # logger
     logger = Logger(config) if master_process else None
