@@ -26,6 +26,7 @@ def eval_epoch(config: dict,
     
     # iterate through the dataloader
     test_iters = config['logging'].get('eval_iters', 1)
+    pbar_iter = iter(sample_dataloader)
     for _ in range(test_iters):
         try:
             batch = next(pbar_iter)

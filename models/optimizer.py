@@ -26,7 +26,7 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
         )
         super().__init__(params, defaults)
 
-    @torch.no_grad
+    @torch.no_grad()
     def step(self, closure=None):  # type: ignore
         for group in self.param_groups:
             # Find the sparse embedding weights

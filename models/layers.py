@@ -94,11 +94,11 @@ class Block(nn.Module):
     def __init__(self, config):
         super().__init__()
         
-        normalze_func = config.normalize.lower()
-        if normalze_func == 'layernorm':
+        normalize_func = config.normalize.lower()
+        if normalize_func == 'layernorm':
             self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
             self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
-        elif normalze_func == 'rmsnorm':
+        elif normalize_func == 'rmsnorm':
             self.ln_1 = lambda x: rms_norm(x, variance_epsilon=config.rms_norm_eps)
             self.ln_2 = lambda x: rms_norm(x, variance_epsilon=config.rms_norm_eps)
         else:
@@ -220,8 +220,8 @@ class RotaryEmbedding(nn.Module):
 
         # Different from paper, but it uses a different permutation in order to obtain the same calculation
         emb = torch.cat((freqs, freqs), dim=-1)
-        self.cos_cached = nn.Buffer(emb.cos(), persistent=False)
-        self.sin_cached = nn.Buffer(emb.sin(), persistent=False)
+        self.register_buffer('cos_cached', emb.cos(), persistent=False)
+        self.register_buffer('sin_cached', emb.sin(), persistent=False)
 
     def forward(self):
         return self.cos_cached, self.sin_cached
@@ -234,15 +234,25 @@ class CastedSparseEmbedding(nn.Module):
 
         # Real Weights
         # Truncated LeCun normal init
-        self.weights = nn.Buffer(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
+        self.register_buffer(
+            "weights",
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std),
+            persistent=True,
         )
 
         # Local weights and IDs
         # Local embeddings, with gradient, not persistent
-        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
+        self.register_buffer(
+            "local_weights",
+            torch.zeros(batch_size, embedding_dim, requires_grad=True),
+            persistent=False,
+        )
         # Local embedding IDs, not persistent
-        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+        self.register_buffer(
+            "local_ids",
+            torch.zeros(batch_size, dtype=torch.int32),
+            persistent=False,
+        )
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self.training:

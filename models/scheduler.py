@@ -65,4 +65,15 @@ class CosineSchedulerWithWarmup(LRScheduler):
             return base_lr * float(current_step) / float(max(1, num_warmup_steps))
 
         progress = float(current_step - num_warmup_steps) / float(max(1, num_training_steps - num_warmup_steps))
-        return base_lr * (min_ratio + max(0.0, (1 - min_ratio) * 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))))
+
+        # Cosine decay term with multiple cycles:
+        #   0.5 * (1 + cos(2 * pi * num_cycles * progress))
+        cosine_argument = math.pi * float(num_cycles) * 2.0 * progress
+        cosine_term = 0.5 * (1.0 + math.cos(cosine_argument))
+
+        # Scale cosine term between min_ratio and 1, and clamp at 0.0
+        scaled_decay = (1 - min_ratio) * cosine_term
+        scheduled_ratio = min_ratio + max(0.0, scaled_decay)
+
+        # Final learning rate for this step
+        return base_lr * scheduled_ratio
