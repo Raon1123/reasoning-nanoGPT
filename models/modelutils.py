@@ -19,11 +19,13 @@ def get_model(config: dict,
               num_identifiers: int=0,
               vocab_size: int=12,
               batch_size: int=32,
-              ignore_label_id: int=-100) -> torch.nn.Module:
+              ignore_label_id: int=-100,
+              world_size: int=1,
+              rank: int=0) -> torch.nn.Module:
     model_config = config['model']
     
     init_from = config['logging'].get('init_from', 'scratch')
-    if init_from == 'resume':
+    if init_from == 'resume' and rank == 0:
         checkpoint = load_ckpt(config, device='cpu')
         
         checkpoint_model_args = checkpoint['model_args']
@@ -45,7 +47,7 @@ def get_model(config: dict,
         _model_config['ignore_label_id'] = ignore_label_id
         model_config = nanogpt.GPTConfig(**_model_config)
         model = nanogpt.GPT(model_config)
-        if init_from == 'resume':
+        if init_from == 'resume' and rank == 0:
             model.load_state_dict(state_dict)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
@@ -56,19 +58,21 @@ def get_model(config: dict,
         
     model.to(device)
     
+    if world_size > 1:
+        with torch.no_grad():
+            for param in list(model.parameters()) + list(model.buffers()):
+                torch.distributed.broadcast(param.data, src=0)
+    
     return model
 
 
 def get_optimizer(config: dict, 
                   model: torch.nn.Module,
-                  device: torch.device) -> torch.optim.Optimizer:
+                  device: torch.device,
+                  world_size: int=1) -> torch.optim.Optimizer:
     optimizer_config = config['training']['optimizer']
     
-    optimizer_type = optimizer_config.get('type', 'adamw')
-    
-    world_size = 1
-    if torch.distributed.is_initialized():
-        world_size = torch.distributed.get_world_size()
+    optimizer_type = optimizer_config.get('type', 'adamw').lower()
     
     optim_config = optimizer_config.get('config', {})
     if optimizer_type == 'adamw':
@@ -87,6 +91,7 @@ def get_optimizer(config: dict,
         adam_optimizer = AdamAtan2(model.parameters(), **optim_config)
         optimizer = CombinedOptimizer(puzzle_emb_optimizer, adam_optimizer)
     elif optimizer_type == 'puzzle':
+        print("We are using Puzzle optimizer.")
         puzzle_config = optimizer_config.get('puzzle_config', {})
         assert 'puzzle_lr' in puzzle_config, "puzzle_lr must be specified in puzzle_config"
         fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
@@ -94,7 +99,7 @@ def get_optimizer(config: dict,
         if use_fused:
             optim_config['fused'] = True
         puzzle_optimizer = CastedSparseEmbeddingSignSGD_Distributed(
-            model.model.puzzle_emb.buffers(),
+            model.puzzle_emb.buffers(), 
             lr=puzzle_config.get('puzzle_lr', 1e-3),
             weight_decay=puzzle_config.get('weight_decay', 0.1),
             world_size=world_size
@@ -104,6 +109,7 @@ def get_optimizer(config: dict,
             **optim_config
         )
         optimizer = CombinedOptimizer(puzzle_optimizer, model_optimizer)
+        print("Puzzle optimizer created.")
     else:
         raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
     
@@ -116,7 +122,7 @@ def get_optimizer(config: dict,
         if optimizer_type == 'distributed':
             raise NotImplementedError("Distributed optimizer is not implemented yet.")
         else:
-            optimizer.load_state_dict(checkpoint['optimizer'])
+            optimizer.load_state_dict(checkpoint['optimizer'], strict=(rank == 0))
     
     return optimizer
 
@@ -174,4 +180,10 @@ def get_scheduler(config: dict,
     else:
         raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
         
+    init_from = config["logging"].get("init_from", "scratch")
+    if init_from == "resume" and scheduler is not None:
+         checkpoint = load_ckpt(config, device="cpu")
+         if "scheduler" in checkpoint and checkpoint["scheduler"] is not None:
+             scheduler.load_state_dict(checkpoint["scheduler"])
+
     return scheduler

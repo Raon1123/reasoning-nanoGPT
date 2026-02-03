@@ -56,6 +56,7 @@ class Logger:
     def log_ckpt(self,
                  model: torch.nn.Module,
                  optimizer: torch.optim.Optimizer,
+                 scheduler: torch.optim.lr_scheduler.LRScheduler,
                  model_args: dict,
                  iter_num: int,
                  best_val_loss: float,
@@ -66,6 +67,7 @@ class Logger:
         checkpoint = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict() if scheduler is not None else None,
             'model_args': model_args,
             'iter_num': iter_num,
             'best_val_loss': best_val_loss,

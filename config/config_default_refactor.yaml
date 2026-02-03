@@ -4,7 +4,7 @@ seed: 42
 logging:
   wandb_log: true
   wandb_project: reasoning_nanoGPT
-  wandb_run_name: refactor_puzzle_deep32
+  wandb_run_name: refactor_puzzle_deep16
   output_dir: outputs/
   eval_only: false
   eval_interval: 1000
@@ -28,18 +28,18 @@ model:
   compile: true
   ignore_idx: false
   config:
-    n_layer: 32
+    n_layer: 16
     n_head: 8
-    n_embd: 128
+    n_embd: 256
     dropout: 0.0
     bias: false
     sparsity: 1.0
-    puzzle_emb_ndim: 128
+    puzzle_emb_ndim: 256
     activation: gelu
 
 training:
   test_batch_size: 32
-  batch_size: 4
+  batch_size: 32
   gradient_accumulation_steps: 4
   block_size: 900
   max_iters: 1000000
