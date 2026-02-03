@@ -4,6 +4,7 @@ import torch
 
 from datasets.datautils import get_dataloader, get_identifiers
 from models.modelutils import get_model, get_optimizer, get_scheduler
+from models.optimizer import CombinedOptimizer  
 from utils.const import IGNORE_LABEL_ID
 from utils.epochs import eval_epoch
 from utils.logger import Logger
@@ -29,7 +30,7 @@ def main(config: dict):
     master_process = (not ddp) or (ddp and ddp_rank == 0)
     autocast_ctx = torch.autocast(device_type=device_type, dtype=torch.float32) if device_type == "cuda" else nullcontext()
     synchronize = torch.cuda.synchronize if device_type == "cuda" else lambda: None
-    scaler = torch.GradScaler(device=device.type) 
+    #scaler = torch.GradScaler(device=device.type) 
     get_max_memory = torch.cuda.max_memory_allocated if device_type == "cuda" else lambda: 0
     gradient_accumulation_steps = config['training'].get('gradient_accumulation_steps', 1 * 8)
     
@@ -48,10 +49,8 @@ def main(config: dict):
         test_loader = None
     else:
         test_batch_size = config['training'].get('test_batch_size', 32)
-        val_loader, _ = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size,
-                                       batch_size=test_batch_size)
-        test_loader, _ = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size,
-                                        batch_size=test_batch_size)
+        val_loader, _ = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size, batch_size=test_batch_size)
+        test_loader, _ = get_dataloader(config, split='test', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size, batch_size=test_batch_size)
     num_identifiers = get_identifiers(config)
     
     max_iters = config['training'].get('max_iters', 100000)
@@ -67,11 +66,11 @@ def main(config: dict):
                       num_identifiers=num_identifiers,
                       vocab_size=meta_vocab_size,
                       batch_size=batch_size,
-                      ignore_label_id=ignore_label_id)
-    if ddp:
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[ddp_local_rank])
+                      ignore_label_id=ignore_label_id,
+                      world_size=ddp_world_size,
+                      rank=ddp_rank)  
     
-    optimizer = get_optimizer(config, model, device)
+    optimizer = get_optimizer(config, model, device, world_size=ddp_world_size)
     scheduler = get_scheduler(config, optimizer)
     
     pbar = range(max_iters)
@@ -123,6 +122,7 @@ def main(config: dict):
                 if iter_num > 0:
                     logger.log_ckpt(model.module if ddp else model,
                                     optimizer,
+                                    scheduler,
                                     model_args=config['model']['config'],
                                     iter_num=iter_num,
                                     best_val_loss=best_val_loss,
@@ -139,19 +139,39 @@ def main(config: dict):
             with autocast_ctx:
                 logits, loss = model(X, puzzle_ids, Y, test_mode=False)
                 loss = loss / gradient_accumulation_steps
-            scaler.scale(loss).backward()
+            #scaler.scale(loss).backward()
+            loss.backward()
+        
+        # all reduce grads
+        if ddp and gradient_accumulation_steps > 1:
+            for param in model.parameters():
+                if param.grad is not None:
+                    torch.distributed.all_reduce(param.grad)
             
         # clip
-        grad_clip = config['training'].get('grad_clip', 1.0)
-        if grad_clip is not None:
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        #grad_clip = config['training'].get('grad_clip', 1.0)
+        #if grad_clip is not None:
+            #if isinstance(optimizer, CombinedOptimizer):
+            #    optimizers = [optimizer.opt1, optimizer.opt2]
+            #    for opt in optimizers:
+            #        scaler.unscale_(opt)
+            #torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
-        scheduler.step()
-        synchronize()
+        #scaler.step(optimizer)
+        #scaler.update()
+        if isinstance(optimizer, CombinedOptimizer):
+            optimizer.opt1.step()
+            optimizer.opt2.step()
+            optimizer.opt1.zero_grad(set_to_none=True)
+            optimizer.opt2.zero_grad(set_to_none=True)
+        else:
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+        if isinstance(scheduler, torch.optim.lr_scheduler._LRScheduler):
+            scheduler.step()
+        elif callable(scheduler):
+            scheduler(iter_num)
+        
         
         if master_process:
             if iter_num % eval_interval == 0:
