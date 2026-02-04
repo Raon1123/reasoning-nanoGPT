@@ -1,4 +1,5 @@
 import math
+from typing import List, Union
 
 from torch.optim.lr_scheduler import LRScheduler
 
@@ -77,3 +78,37 @@ class CosineSchedulerWithWarmup(LRScheduler):
 
         # Final learning rate for this step
         return base_lr * scheduled_ratio
+
+
+class CombinedScheduler(LRScheduler):
+    def __init__(self, schedulers: List[Union[LRScheduler, None]], last_epoch: int = -1):
+        self.schedulers = schedulers
+        # Dummy optimizer to satisfy the LRScheduler base class
+        dummy_optimizer = schedulers[0].optimizer if schedulers and schedulers[0] is not None else None
+        super().__init__(dummy_optimizer, last_epoch)
+
+    def _get_optimizers(self):
+        optimizers = []
+        for scheduler in self.schedulers:
+            if scheduler is not None:
+                optimizers.append(scheduler.optimizer)
+        return optimizers
+
+    def get_lr(self):
+        lrs = []
+        for scheduler in self.schedulers:
+            if scheduler is not None:
+                lrs.extend(scheduler.get_lr())
+        return lrs
+
+    def get_last_lr(self) -> List[float]:
+        # last lr from last scheduler
+        for scheduler in reversed(self.schedulers):
+            if scheduler is not None:
+                return scheduler.get_last_lr()
+        return []
+
+    def step(self, epoch=None):
+        for scheduler in self.schedulers:
+            if scheduler is not None:
+                scheduler.step(epoch)

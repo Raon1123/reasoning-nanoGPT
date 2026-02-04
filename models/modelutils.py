@@ -51,17 +51,44 @@ def get_model(config: dict,
             model.load_state_dict(state_dict)
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
-        
-    is_compile = config['model'].get('compile', False)
-    if is_compile:
-        model = torch.compile(model)
+    
+    # puzzle_params = model.puzzle_emb.buffers() 
+    # print("Puzzle optimizer created for non-compiled model.") 
+    # for param in puzzle_params:
+    #     print(f"Puzzle param shape: {param.shape}, dtype: {param.dtype}, device: {param.device}, requires_grad: {param.requires_grad}, is_leaf: {param.is_leaf}")
         
     model.to(device)
     
-    if world_size > 1:
-        with torch.no_grad():
-            for param in list(model.parameters()) + list(model.buffers()):
-                torch.distributed.broadcast(param.data, src=0)
+    # Fix is_leaf=False issue after to(device) for puzzle parameters
+    puzzle_params = model.puzzle_emb.buffers() 
+    for param in puzzle_params:
+        if param.requires_grad and not param.is_leaf:
+            param.detach_()
+            param.requires_grad = True
+    
+    is_compile = config['model'].get('compile', False)
+    if is_compile:
+        # must torch compile preserve the leaf status of puzzle embedding parameters?
+        model = torch.compile(model,
+                              fullgraph=True,
+                              )
+    
+    
+    if is_compile:
+        if hasattr(model, '_orig_mod'):
+             puzzle_params = model._orig_mod.puzzle_emb.buffers()
+        elif hasattr(model, 'puzzle_emb'):
+             puzzle_params = model.puzzle_emb.buffers()
+        else:
+             puzzle_params = []
+    else:
+        puzzle_params = model.puzzle_emb.buffers()
+    
+    with torch.device("cuda") if device.startswith("cuda") else torch.device("cpu"):
+        if world_size > 1:
+            with torch.no_grad():
+                for param in list(model.parameters()) + list(model.buffers()):
+                    torch.distributed.broadcast(param, src=0)
     
     return model
 
@@ -69,7 +96,8 @@ def get_model(config: dict,
 def get_optimizer(config: dict, 
                   model: torch.nn.Module,
                   device: torch.device,
-                  world_size: int=1) -> torch.optim.Optimizer:
+                  world_size: int=1,
+                  rank: int=0) -> torch.optim.Optimizer:
     optimizer_config = config['training']['optimizer']
     
     optimizer_type = optimizer_config.get('type', 'adamw').lower()
@@ -89,7 +117,7 @@ def get_optimizer(config: dict,
             world_size=world_size
         )
         adam_optimizer = AdamAtan2(model.parameters(), **optim_config)
-        optimizer = CombinedOptimizer(puzzle_emb_optimizer, adam_optimizer)
+        optimizer = CombinedOptimizer([puzzle_emb_optimizer, adam_optimizer])
     elif optimizer_type == 'puzzle':
         print("We are using Puzzle optimizer.")
         puzzle_config = optimizer_config.get('puzzle_config', {})
@@ -98,8 +126,22 @@ def get_optimizer(config: dict,
         use_fused = fused_available and device.type == 'cuda'
         if use_fused:
             optim_config['fused'] = True
+        
+        # if model is compiled, we cannot access model.puzzle_emb directly
+        # if model is compiled, we cannot access model.puzzle_emb directly
+        # check for _orig_mod (torch.compile)
+        if hasattr(model, '_orig_mod'):
+             puzzle_params = model._orig_mod.puzzle_emb.buffers()
+        elif hasattr(model, 'puzzle_emb'):
+            puzzle_params = model.puzzle_emb.buffers() 
+            print(f"Device type: {device.type}, device number: {device.index}")
+            for param in puzzle_params:
+                print(f"Puzzle param shape: {param.shape}, dtype: {param.dtype}, device: {param.device}, requires_grad: {param.requires_grad}, is_leaf: {param.is_leaf}")
+        else:
+            puzzle_params = model.module.puzzle_emb.buffers()
+        
         puzzle_optimizer = CastedSparseEmbeddingSignSGD_Distributed(
-            model.puzzle_emb.buffers(), 
+            puzzle_params, 
             lr=puzzle_config.get('puzzle_lr', 1e-3),
             weight_decay=puzzle_config.get('weight_decay', 0.1),
             world_size=world_size
@@ -108,7 +150,7 @@ def get_optimizer(config: dict,
             model.parameters(),
             **optim_config
         )
-        optimizer = CombinedOptimizer(puzzle_optimizer, model_optimizer)
+        optimizer = CombinedOptimizer([puzzle_optimizer, model_optimizer])
         print("Puzzle optimizer created.")
     else:
         raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
@@ -128,19 +170,17 @@ def get_optimizer(config: dict,
 
 
 def get_scheduler(config: dict, 
-                  optimizer: Union[torch.optim.Optimizer, CombinedOptimizer]) -> Union[torch.optim.lr_scheduler.LRScheduler, CombinedScheduler, None]:
+                  optimizer: torch.optim.Optimizer,
+                  last_epoch=-1) -> Union[torch.optim.lr_scheduler.LRScheduler, None]:
     scheduler_type = config['training']['scheduler'].get('type', 'compose').lower()
     
     if isinstance(optimizer, CombinedOptimizer):
-        opt1 = optimizer.opt1
-        opt2 = optimizer.opt2
-        scheduler1 = get_scheduler(config, opt1)
-        scheduler2 = get_scheduler(config, opt2)
-        if scheduler1 is None and scheduler2 is None:
-            return None
-        return CombinedScheduler(
-            [scheduler1, scheduler2]
-            )
+        schedulers = []
+        for opt in optimizer.optimizers:
+            scheduler = get_scheduler(config, opt, last_epoch=last_epoch)
+            schedulers.append(scheduler)
+        return CombinedScheduler(schedulers, last_epoch=last_epoch)
+            
         
     # base_lr from optimizer
     learning_rate = None

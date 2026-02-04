@@ -30,15 +30,9 @@ def main(config: dict):
     master_process = (not ddp) or (ddp and ddp_rank == 0)
     autocast_ctx = torch.autocast(device_type=device_type, dtype=torch.float32) if device_type == "cuda" else nullcontext()
     synchronize = torch.cuda.synchronize if device_type == "cuda" else lambda: None
-    #scaler = torch.GradScaler(device=device.type) 
+    scaler = torch.GradScaler(device=device.type) 
     get_max_memory = torch.cuda.max_memory_allocated if device_type == "cuda" else lambda: 0
     gradient_accumulation_steps = config['training'].get('gradient_accumulation_steps', 1 * 8)
-    
-    # logger
-    logger = Logger(config) if master_process else None
-    always_save = config['logging'].get('always_save', False)
-    best_val_loss = float('inf') if master_process else None
-    eval_only = config['logging'].get('eval_only', False) if master_process else False
     
     # data loader
     train_loader, train_metadata = get_dataloader(config, split='train', ddp_local_rank=ddp_local_rank, world_size=ddp_world_size)
@@ -70,7 +64,8 @@ def main(config: dict):
                       world_size=ddp_world_size,
                       rank=ddp_rank)  
     
-    optimizer = get_optimizer(config, model, device, world_size=ddp_world_size)
+    optimizer = get_optimizer(config, model, device, 
+                              world_size=ddp_world_size, rank=ddp_rank)
     scheduler = get_scheduler(config, optimizer)
     
     pbar = range(max_iters)
@@ -79,6 +74,11 @@ def main(config: dict):
         pbar = tqdm(pbar, initial=0, dynamic_ncols=True)
     
     epoch = 0
+    # logger
+    logger = Logger(config) if master_process else None
+    always_save = config['logging'].get('always_save', False)
+    best_val_loss = float('inf') if master_process else None
+    eval_only = config['logging'].get('eval_only', False) if master_process else False
     
     for iter_num in pbar:
         model.train()
@@ -151,26 +151,13 @@ def main(config: dict):
         # clip
         #grad_clip = config['training'].get('grad_clip', 1.0)
         #if grad_clip is not None:
-            #if isinstance(optimizer, CombinedOptimizer):
-            #    optimizers = [optimizer.opt1, optimizer.opt2]
-            #    for opt in optimizers:
-            #        scaler.unscale_(opt)
-            #torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        #    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         
         #scaler.step(optimizer)
         #scaler.update()
-        if isinstance(optimizer, CombinedOptimizer):
-            optimizer.opt1.step()
-            optimizer.opt2.step()
-            optimizer.opt1.zero_grad(set_to_none=True)
-            optimizer.opt2.zero_grad(set_to_none=True)
-        else:
-            optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
-        if isinstance(scheduler, torch.optim.lr_scheduler._LRScheduler):
-            scheduler.step()
-        elif callable(scheduler):
-            scheduler(iter_num)
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        scheduler.step(epoch=iter_num)
         
         
         if master_process:

@@ -1,9 +1,10 @@
 # Optimizers from HRM paper
+from typing import List, Union
 
 import torch
 import torch.distributed as dist
 from torch.optim.optimizer import Optimizer, ParamsT
-from typing import Union
+
 
 class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
     def __init__(
@@ -26,7 +27,7 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
         )
         super().__init__(params, defaults)
 
-    @torch.no_grad()
+    @torch.no_grad
     def step(self, closure=None):  # type: ignore
         for group in self.param_groups:
             # Find the sparse embedding weights
@@ -45,21 +46,21 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
                 else:
                     assert False
                 
-            assert local_weights_grad is not None
             assert local_ids is not None
             assert weights is not None
         
             # Apply SignSGD
             # Adam ≈ SignSGD if gradient is very sparse
-            _sparse_emb_signsgd_dist(
-                local_weights_grad,
-                local_ids,
-                weights,
-                
-                lr=group["lr"],
-                weight_decay=group["weight_decay"],
-                world_size=group["world_size"]
-            )
+            if local_weights_grad is not None:
+                _sparse_emb_signsgd_dist(
+                    local_weights_grad,
+                    local_ids,
+                    weights,
+                    
+                    lr=group["lr"],
+                    weight_decay=group["weight_decay"],
+                    world_size=group["world_size"]
+                )
             
             
 def _sparse_emb_signsgd_dist(
@@ -99,22 +100,41 @@ def _sparse_emb_signsgd_dist(
     weights[grad_ids] = p
 
 
-class CombinedOptimizer:
-    def __init__(self, opt1, opt2):
-        self.opt1 = opt1
-        self.opt2 = opt2
+class CombinedOptimizer(Optimizer):
+    def __init__(self, optimizers: List[Optimizer]):
+        self._optimizers = optimizers
+        # Dummy param_groups and defaults to satisfy the Optimizer base class
+        params = []
+        for opt in optimizers:
+            params.extend(opt.param_groups)
+        super().__init__(params, {})
 
+    @torch.no_grad()
     def step(self, closure=None):
-        self.opt1.step(closure)
-        self.opt2.step(closure)
+        for optimizer in self._optimizers:
+            optimizer.step(closure)
 
-    def zero_grad(self):
-        self.opt1.zero_grad()
-        self.opt2.zero_grad()
-
-    def state_dict(self):
-        return {'opt1': self.opt1.state_dict(), 'opt2': self.opt2.state_dict()}
-
-    def load_state_dict(self, state_dict):
-        self.opt1.load_state_dict(state_dict['opt1'])
-        self.opt2.load_state_dict(state_dict['opt2'])
+    def zero_grad(self, set_to_none: bool = False):
+        for optimizer in self._optimizers:
+            optimizer.zero_grad(set_to_none)
+            
+    # Allow access to the individual optimizers if needed
+    def __getattr__(self, name):
+        for optimizer in self._optimizers:
+            if hasattr(optimizer, name):
+                return getattr(optimizer, name)
+        raise AttributeError(f"'CombinedOptimizer' object has no attribute '{name}'")
+    
+    # for logging purposes
+    def param_groups(self):
+        groups = []
+        for optimizer in self._optimizers:
+            groups.extend(optimizer.param_groups)
+        return groups
+    
+    # get list of optimizers
+    @property
+    def optimizers(self) -> List[Optimizer]:
+        return self._optimizers
+    
+    

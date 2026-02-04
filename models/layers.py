@@ -234,25 +234,20 @@ class CastedSparseEmbedding(nn.Module):
 
         # Real Weights
         # Truncated LeCun normal init
-        self.register_buffer(
-            "weights",
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std),
-            persistent=True,
-        )
+        self.weights = nn.Buffer(
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
+        ) # requires_grad=False, is_leaf=True
 
         # Local weights and IDs
         # Local embeddings, with gradient, not persistent
-        self.register_buffer(
-            "local_weights",
-            torch.zeros(batch_size, embedding_dim, requires_grad=True),
-            persistent=False,
-        )
+        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
+        # requires_grad=True, is_leaf=False
         # Local embedding IDs, not persistent
-        self.register_buffer(
-            "local_ids",
-            torch.zeros(batch_size, dtype=torch.int32),
-            persistent=False,
-        )
+        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+        # requires_grad=False, is_leaf=True
+        
+        # How can we make local_weights as leaf tensor
+        self.local_weights.requires_grad = True
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         if not self.training:
