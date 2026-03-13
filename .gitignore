@@ -6,6 +6,8 @@ runs/
 out/
 wandb/
 logs/
+outs/
+outputs/
 
 *.out
 *.err

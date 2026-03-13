@@ -53,6 +53,9 @@ class GPTConfig:
     num_identifiers: int = 0  # Added to support puzzle embeddings
     ignore_label_id: int = -100  # Added to support sparse loss
     batch_size: int = 32  # Added to support puzzle embeddings
+    
+    separate_reasoning: bool = False  # Whether to use separate reasoning blocks
+    forward_dtype: torch.dtype = torch.float16  # dtype to use for forward pass, can be set to torch.float16 or torch.bfloat16 for memory savings on supported hardware
 
 class GPT(nn.Module):
 
@@ -70,7 +73,7 @@ class GPT(nn.Module):
                 embedding_dim=self.puzzle_emb_len,
                 batch_size=self.config.batch_size,
                 init_std=0,
-                cast_to=torch.float32
+                cast_to=self.config.forward_dtype
             )
 
         self.transformer = nn.ModuleDict(dict(
@@ -93,7 +96,7 @@ class GPT(nn.Module):
                 num_embeddings=config.block_size + self.puzzle_emb_len,
                 embedding_dim=config.n_embd,
                 init_std=embed_init_std,
-                cast_to=torch.float32
+                cast_to=config.forward_dtype
             )
         elif pos_encodings == 'rotary':
             self.emb_pos = None  # no learned positional embeddings needed
@@ -119,6 +122,20 @@ class GPT(nn.Module):
 
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
+        
+        if config.separate_reasoning:
+            print("Using separate reasoning blocks. This will use more memory but may improve performance on reasoning tasks.")
+            self.register_buffer(
+                'y_init',
+                trunc_normal_init_(torch.empty(self.config.n_embd, dtype=self.config.forward_dtype), std=1),
+                persistent=True,
+            )
+            self.register_buffer(
+                'z_init',
+                trunc_normal_init_(torch.empty(self.config.n_embd, dtype=self.config.forward_dtype), std=1),
+                persistent=True,
+            )
+            
 
     def get_num_params(self, non_embedding=True):
         """
@@ -138,6 +155,12 @@ class GPT(nn.Module):
                 torch.nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            
+    def _transforemers_forward(self, x, sequence_info):
+        for block in self.transformer.h:
+            x = block(x, cos_sin=sequence_info['cos_sin'])
+        x = self.transformer.ln_f(x)
+        return x
 
     def forward(self, 
                 idx: torch.Tensor,
@@ -150,13 +173,24 @@ class GPT(nn.Module):
         
         x = self._input_embeddings(idx, puzzle_idx)
         
-        for block in self.transformer.h:
-            x = block(x, cos_sin=sequence_info['cos_sin'])
-        x = self.transformer.ln_f(x)
+        if self.config.separate_reasoning:
+            # if we are using separate reasoning blocks, we use two latent parameters y and z to forward through the transformer blocks in an alternating fashion
+            # latent parameters y and z are initialized as the ranomly projected input embeddings, and then get updated by alternating transformer blocks
+            # copy the initial input embeddings into y and z
+            y = self.y_init[None, None, :].expand(x.size(0), 1, -1).clone() + x
+            z = self.z_init[None, None, :].expand(x.size(0), 1, -1).clone() + x
+            
+            # like Tiny Recursive Models manner
+            z = self._transforemers_forward(z + y + x, sequence_info)
+            y = self._transforemers_forward(y + z, sequence_info)
+            
+            ret = y
+        else:
+            ret = self._transforemers_forward(x, sequence_info)
 
         if targets is not None:
             # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
+            logits = self.lm_head(ret)
             # range of logits and targets is (B, T, C) and (B, T) respectively
             if self.puzzle_emb_len > 0:
                 # remove puzzle embedding positions from logits
@@ -175,7 +209,7 @@ class GPT(nn.Module):
                 loss = F.cross_entropy(logits.to(torch.float32).contiguous().view(-1, logits.size(-1)), targets.to(torch.long).view(-1), ignore_index=self.config.ignore_label_id).squeeze(-1)
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+            logits = self.lm_head(ret[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
         return logits, loss
@@ -210,8 +244,11 @@ class GPT(nn.Module):
                 
         
         if self.config.pos_encodings == 'learned':
+            # fix B10: use pos to index into emb_pos (was using full weight table,
+            # which only worked when t == block_size)
+            pos_emb = self.emb_pos(pos)  # shape (t + puzzle_emb_len, n_embd)
             # scale by inverse root square 2 to maintain forward variance
-            tok_emb = 0.7071067811865475 * (tok_emb + self.emb_pos.embedding_weight.to(torch.float32))
+            tok_emb = 0.7071067811865475 * (tok_emb + pos_emb)
         
         x = self.embed_scale * tok_emb
         

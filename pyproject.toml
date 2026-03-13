@@ -38,3 +38,8 @@ flash-attn = [{ requirement = "torch", match-runtime = true }]
 
 [tool.uv.extra-build-variables]
 flash-attn = { FLASH_ATTENTION_SKIP_CUDA_BUILD = "FALSE" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

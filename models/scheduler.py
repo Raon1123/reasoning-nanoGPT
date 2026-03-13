@@ -71,8 +71,9 @@ class CosineSchedulerWithWarmup(LRScheduler):
 class CombinedScheduler(LRScheduler):
     def __init__(self, schedulers, last_epoch=-1):
         self.schedulers = schedulers
+        self._last_epoch = last_epoch
         super().__init__(schedulers[0].optimizer, last_epoch)
-
+        
     def get_lr(self):
         lrs = []
         for scheduler in self.schedulers:
@@ -83,3 +84,7 @@ class CombinedScheduler(LRScheduler):
         for scheduler in self.schedulers:
             scheduler.step(epoch)
         self._last_epoch += 1
+        
+    def get_last_lr(self):
+        # returns last lr of the second scheduler (the one for the main optimizer)
+        return self.schedulers[1].get_last_lr()

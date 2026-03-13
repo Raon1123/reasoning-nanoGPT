@@ -34,7 +34,7 @@ class CastedSparseEmbeddingSignSGD_Distributed(Optimizer):
             local_ids = None
             weights = None
             
-            assert len(group["params"]) == 3
+            #assert len(group["params"]) == 3
             for p in group["params"]:
                 if p.requires_grad:
                     local_weights_grad = p.grad
@@ -118,3 +118,6 @@ class CombinedOptimizer:
     def load_state_dict(self, state_dict):
         self.opt1.load_state_dict(state_dict['opt1'])
         self.opt2.load_state_dict(state_dict['opt2'])
+        
+    def get_last_lr(self):
+        return self.opt2.get_last_lr()

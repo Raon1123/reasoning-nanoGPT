@@ -1,15 +1,10 @@
-import math
 from typing import Tuple, Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-try:
-    from flash_attn_interface import flash_attn_func  # type: ignore[import]
-except ImportError:
-    # Fallback to FlashAttention 2
-    from flash_attn import flash_attn_func  # type: ignore[import]
+from utils.toolkit import trunc_normal_init_
 
 CosSin = Tuple[torch.Tensor, torch.Tensor]
 
@@ -50,10 +45,10 @@ class CausalSelfAttention(nn.Module):
         q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
         
-        # RoPE
+        # RoPE — slice to actual T so the cache can be larger than the sequence
         if cos_sin is not None:
             cos, sin = cos_sin
-            q, k = apply_rotary_pos_emb(q, k, cos, sin)
+            q, k = apply_rotary_pos_emb(q, k, cos[:T], sin[:T])
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
             # efficient attention using Flash Attention CUDA kernels
@@ -144,34 +139,6 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, si
     return q_embed.to(orig_dtype), k_embed.to(orig_dtype)
 
 
-def trunc_normal_init_(tensor: torch.Tensor, std: float = 1.0, lower: float = -2.0, upper: float = 2.0):
-    # NOTE: PyTorch nn.init.trunc_normal_ is not mathematically correct, the std dev is not actually the std dev of initialized tensor
-    # This function is a PyTorch version of jax truncated normal init (default init method in flax)
-    # https://github.com/jax-ml/jax/blob/main/jax/_src/random.py#L807-L848
-    # https://github.com/jax-ml/jax/blob/main/jax/_src/nn/initializers.py#L162-L199
-
-    with torch.no_grad():
-        if std == 0:
-            tensor.zero_()
-        else:
-            sqrt2 = math.sqrt(2)
-            a = math.erf(lower / sqrt2)
-            b = math.erf(upper / sqrt2)
-            z = (b - a) / 2
-
-            c = (2 * math.pi) ** -0.5
-            pdf_u = c * math.exp(-0.5 * lower ** 2)
-            pdf_l = c * math.exp(-0.5 * upper ** 2)
-            comp_std = std / math.sqrt(1 - (upper * pdf_u - lower * pdf_l) / z - ((pdf_u - pdf_l) / z) ** 2)
-
-            tensor.uniform_(a, b)
-            tensor.erfinv_()
-            tensor.mul_(sqrt2 * comp_std)
-            tensor.clip_(lower * comp_std, upper * comp_std)
-
-    return tensor
-
-
 class CastedLinear(nn.Module):
     def __init__(self,
                  in_features: int,
@@ -188,7 +155,7 @@ class CastedLinear(nn.Module):
             self.bias = nn.Parameter(torch.zeros((out_features, )))
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.linear(input, self.weight.to(input.dtype), bias=self.bias.to(input.dtype) if self.bias is not None else None)
+        return F.linear(input, self.weight, bias=self.bias)
 
 
 class CastedEmbedding(nn.Module):
@@ -202,11 +169,11 @@ class CastedEmbedding(nn.Module):
 
         # Truncated LeCun normal init
         self.embedding_weight = nn.Parameter(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std)
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim), dtype=cast_to), std=init_std)
         )
         
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        return F.embedding(input, self.embedding_weight.to(self.cast_to))
+        return F.embedding(input, self.embedding_weight)
 
 
 class RotaryEmbedding(nn.Module):
@@ -232,29 +199,25 @@ class CastedSparseEmbedding(nn.Module):
         super().__init__()
         self.cast_to = cast_to
 
-        # Real Weights
-        # Truncated LeCun normal init
-        self.weights = nn.Buffer(
-            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim)), std=init_std), persistent=True
+        # Real weights (updated with a custom optimizer, no autograd)
+        self.weights = nn.Parameter(
+            trunc_normal_init_(torch.empty((num_embeddings, embedding_dim), dtype=cast_to), std=init_std),
+            requires_grad=False,
         )
-
-        # Local weights and IDs
-        # Local embeddings, with gradient, not persistent
-        self.local_weights = nn.Buffer(torch.zeros(batch_size, embedding_dim, requires_grad=True), persistent=False)
-        # Local embedding IDs, not persistent
-        self.local_ids = nn.Buffer(torch.zeros(batch_size, dtype=torch.int32), persistent=False)
+        # Local embeddings used during the forward pass and optimized by our custom SignSGD optimizer
+        self.local_weights = nn.Parameter(torch.zeros(batch_size, embedding_dim, dtype=cast_to), requires_grad=True)
+        # Local IDs are needed by the optimizer but never trained
+        self.local_ids = nn.Parameter(torch.zeros(batch_size, dtype=torch.long), requires_grad=False)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        if not self.training:
-            # Test mode, no gradient
-            return self.weights[inputs].to(self.cast_to)
-            
-        # Training mode, fill puzzle embedding from weights
-        with torch.no_grad():
-            self.local_weights.copy_(self.weights[inputs])
-            self.local_ids.copy_(inputs)
+        if self.training:
+            with torch.no_grad():
+                self.local_weights.copy_(self.weights[inputs])
+                self.local_ids.copy_(inputs)
+            return self.local_weights
 
-        return self.local_weights.to(self.cast_to)
+        with torch.no_grad():
+            return self.weights[inputs]
     
     
 class SwiGLU(nn.Module):
