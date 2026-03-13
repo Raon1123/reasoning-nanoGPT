@@ -1,0 +1,64 @@
+# T4: TRM H=3, L=4 (paper default for ARC-AGI) — optimized training regime
+#
+# Changes from T2_trm_H3_L4:
+#   - lr: 6e-4 → 3e-4  (more stable for deep recurrence)
+#   - max_iters: 100k → 300k  (TRM needs more epochs to converge)
+#   - warmup_iters: 2000 → 6000  (3% warmup for recurrent stability)
+#   - lr_decay_iters: 100k → 300k  (match max_iters)
+#   - min_lr: 6e-5 → 3e-5  (deeper decay: 10% of peak)
+#   - gradient_accumulation_steps: 4 → 1  (same batch repeated 4x is wasted compute)
+#   - eval_interval: 1000 → 2000  (reduce eval overhead at longer run)
+#   - always_save_checkpoint: true  (don't lose best checkpoint at 300k steps)
+#
+# Architecture is identical to T2 (Samsung TRM paper default for ARC-AGI):
+#   H_cycles=3, L_cycles=4, n_layer=4, SwiGLU, RMSNorm, RoPE
+
+logging:
+  wandb_run_name: T4_trm_H3L4_optimized
+  output_dir: outputs/
+  wandb_log: true
+  wandb_project: reasoning_nanoGPT_ablations
+  eval_only: false
+  eval_interval: 2000
+  eval_iters: 50
+  always_save_checkpoint: true
+  init_from: scratch
+device: cuda
+seed: 42
+dataset:
+  type: arc_agi1
+  data_path: data/arc_agi/processed_data
+  config: {seed: 42, shuffle: true, num_workers: 0, pin_memory: true}
+model:
+  type: trm
+  dtype: float16
+  compile: false
+  ignore_idx: false
+  config:
+    H_cycles: 3
+    L_cycles: 4
+    n_layer: 4
+    n_head: 8
+    n_embd: 256
+    dropout: 0.0
+    bias: false
+    sparsity: 1.0
+    puzzle_emb_ndim: 0
+    activation: swiglu
+    expansion: 2.667
+    normalize: rmsnorm
+    pos_encodings: rotary
+    rope_theta: 10000.0
+training:
+  test_batch_size: 32
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  block_size: 900
+  max_iters: 300000
+  optimizer:
+    type: adamw
+    config: {lr: 3.0e-4, betas: [0.9, 0.95], weight_decay: 0.1}
+    grad_clip: 1.0
+  scheduler:
+    type: compose
+    config: {warmup_iters: 6000, lr_decay_iters: 300000, min_lr: 3.0e-5}

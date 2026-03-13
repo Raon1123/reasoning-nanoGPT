@@ -1,0 +1,59 @@
+# T6: TRM H=5, L=4 — deeper outer recurrence
+#
+# Increases H_cycles: 3 → 5 to allow more high-level reasoning iterations.
+# The Samsung paper shows H_cycles is the primary driver of performance on ARC-AGI.
+# With H=5, the model runs 5*(4+1) = 25 total L_level forward passes,
+# but only the final H step contributes gradients (no_grad for H=1..4).
+#
+# Same training regime as T4 (optimized).
+# This is the most direct config change to push toward Samsung's 30-40% range.
+
+logging:
+  wandb_run_name: T6_trm_H5L4_deep
+  output_dir: outputs/
+  wandb_log: true
+  wandb_project: reasoning_nanoGPT_ablations
+  eval_only: false
+  eval_interval: 2000
+  eval_iters: 50
+  always_save_checkpoint: true
+  init_from: scratch
+device: cuda
+seed: 42
+dataset:
+  type: arc_agi1
+  data_path: data/arc_agi/processed_data
+  config: {seed: 42, shuffle: true, num_workers: 0, pin_memory: true}
+model:
+  type: trm
+  dtype: float16
+  compile: false
+  ignore_idx: false
+  config:
+    H_cycles: 5
+    L_cycles: 4
+    n_layer: 4
+    n_head: 8
+    n_embd: 256
+    dropout: 0.0
+    bias: false
+    sparsity: 1.0
+    puzzle_emb_ndim: 0
+    activation: swiglu
+    expansion: 2.667
+    normalize: rmsnorm
+    pos_encodings: rotary
+    rope_theta: 10000.0
+training:
+  test_batch_size: 32
+  batch_size: 32
+  gradient_accumulation_steps: 1
+  block_size: 900
+  max_iters: 300000
+  optimizer:
+    type: adamw
+    config: {lr: 3.0e-4, betas: [0.9, 0.95], weight_decay: 0.1}
+    grad_clip: 1.0
+  scheduler:
+    type: compose
+    config: {warmup_iters: 6000, lr_decay_iters: 300000, min_lr: 3.0e-5}
