@@ -1,0 +1,42 @@
+# Ablation experiment queue.
+# The runner (scripts/run_queue.py) processes this list sequentially.
+# Each entry is a path to an experiment config relative to the project root.
+# Comment out experiments to skip them, or reorder to change priority.
+
+experiments:
+  # Group A: Standard Transformer vs. Tiny Recursive
+  - config/experiments/A1_transformer_baseline.yaml
+  - config/experiments/A2_tiny_recursive.yaml
+
+  # Group B: Model depth
+  - config/experiments/B1_depth_4.yaml
+  - config/experiments/B2_depth_8.yaml
+  - config/experiments/B3_depth_16.yaml
+
+  # Group C: Embedding dimension
+  - config/experiments/C1_embd_128.yaml
+  # C2 is the same as A1 / B2 baseline (n_embd=256)
+  - config/experiments/C3_embd_512.yaml
+
+  # Group D: Activation function
+  - config/experiments/D1_activation_relu.yaml
+  # D2 (gelu) is covered by A1 baseline
+  - config/experiments/D3_activation_swiglu.yaml
+
+  # Group E: Normalization
+  # E1 (layernorm) is covered by A1 baseline
+  - config/experiments/E2_norm_rmsnorm.yaml
+
+  # Group F: Positional embeddings
+  # F1 (learned) is covered by A1 baseline
+  - config/experiments/F2_pos_rotary.yaml
+
+  # Group T: TRM cycle ablation (H_cycles × L_cycles)
+  - config/experiments/T1_trm_H1_L4.yaml
+  - config/experiments/T2_trm_H3_L4.yaml
+  - config/experiments/T3_trm_H3_L6.yaml
+
+  # Group T (optimized): Tuned training regime targeting Samsung TRM ~30-40% range
+  - config/experiments/T4_trm_H3L4_optimized.yaml  # T2 + longer train + lower LR + GA=1
+  - config/experiments/T5_trm_H3L4_highcap.yaml    # T4 + n_embd=512 (higher capacity)
+  - config/experiments/T6_trm_H5L4_deep.yaml       # T4 + H_cycles=5 (deeper recurrence)
